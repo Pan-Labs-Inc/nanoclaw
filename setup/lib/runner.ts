@@ -11,13 +11,16 @@
  *
  * See docs/setup-flow.md for the three-level output contract.
  */
-import { spawn } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
 import fs from 'fs';
 
 import * as p from '@clack/prompts';
 import k from 'kleur';
 
 import * as setupLog from '../logs.js';
+import { offerClaudeAssist } from './claude-assist.js';
+import { emit as phEmit } from './diagnostics.js';
+import { fitToWidth } from './theme.js';
 
 export type Fields = Record<string, string>;
 export type Block = { type: string; fields: Fields };
@@ -99,12 +102,19 @@ export class StatusStream {
  * raw log file (level 3) and parsed for status blocks (level 2 summary).
  * The onBlock callback fires per status block as they close so the UI can
  * react mid-stream.
+ *
+ * `onLine`, if provided, fires for every line from stdout + stderr (minus
+ * status-block control lines) so callers can render a rolling tail. Status
+ * block lines are still parsed by the `StatusStream` — they're just
+ * excluded from the line feed so they don't fill the user-facing window
+ * with `=== NANOCLAW SETUP: …` noise.
  */
 export function spawnStep(
   stepName: string,
   extra: string[],
   onBlock: (block: Block) => void,
   rawLogPath: string,
+  onLine?: (line: string) => void,
 ): Promise<StepResult> {
   return new Promise((resolve) => {
     const args = ['exec', 'tsx', 'setup/index.ts', '--step', stepName];
@@ -115,13 +125,34 @@ export function spawnStep(
     const raw = fs.createWriteStream(rawLogPath, { flags: 'w' });
     raw.write(`# ${stepName} — ${new Date().toISOString()}\n\n`);
 
+    // Per-line forwarder for the optional onLine callback. We keep our own
+    // buffer (separate from StatusStream's) so the parser still gets raw
+    // chunks and isn't forced through a line-by-line path it doesn't need.
+    let lineBuf = '';
+    const pushLines = (chunk: string): void => {
+      if (!onLine) return;
+      lineBuf += chunk;
+      let idx: number;
+      while ((idx = lineBuf.indexOf('\n')) !== -1) {
+        const line = lineBuf.slice(0, idx).replace(/\r/g, '');
+        lineBuf = lineBuf.slice(idx + 1);
+        if (line.startsWith('=== NANOCLAW SETUP:')) continue;
+        if (line.startsWith('=== END ===')) continue;
+        if (line.trim()) onLine(line);
+      }
+    };
+
     child.stdout.on('data', (chunk: Buffer) => {
-      stream.write(chunk.toString('utf-8'));
+      const s = chunk.toString('utf-8');
+      stream.write(s);
       raw.write(chunk);
+      pushLines(s);
     });
     child.stderr.on('data', (chunk: Buffer) => {
-      stream.transcript += chunk.toString('utf-8');
+      const s = chunk.toString('utf-8');
+      stream.transcript += s;
       raw.write(chunk);
+      pushLines(s);
     });
 
     child.on('close', (code) => {
@@ -184,11 +215,17 @@ export async function runQuietStep(
 ): Promise<StepResult & { rawLog: string; durationMs: number }> {
   const rawLog = setupLog.stepRawLog(stepName);
   const start = Date.now();
+  phEmit('step_started', { step: stepName });
   const result = await runUnderSpinner(labels, () =>
     spawnStep(stepName, extra, () => {}, rawLog),
   );
   const durationMs = Date.now() - start;
   writeStepEntry(stepName, result, durationMs, rawLog);
+  phEmit('step_completed', {
+    step: stepName,
+    status: outcomeStatus(result),
+    duration_ms: durationMs,
+  });
   return { ...result, rawLog, durationMs };
 }
 
@@ -207,6 +244,7 @@ export async function runQuietChild(
 ): Promise<QuietChildResult & { rawLog: string; durationMs: number }> {
   const rawLog = setupLog.stepRawLog(logName);
   const start = Date.now();
+  phEmit('step_started', { step: logName });
   const result = await runUnderSpinner(labels, () =>
     spawnQuiet(cmd, args, rawLog, opts?.env),
   );
@@ -221,7 +259,15 @@ export async function runQuietChild(
       ? 'skipped'
       : 'success';
   setupLog.step(logName, status, durationMs, fields, rawLog);
+  phEmit('step_completed', { step: logName, status, duration_ms: durationMs });
   return { ...result, rawLog, durationMs };
+}
+
+/** Collapse a step run into the three-way status used by diagnostics + progression log. */
+function outcomeStatus(result: StepResult): 'success' | 'skipped' | 'failed' {
+  const rawStatus = result.terminal?.fields.STATUS;
+  if (!result.ok) return 'failed';
+  return rawStatus === 'skipped' ? 'skipped' : 'success';
 }
 
 /** Turn a step's terminal-block fields into a concise progression-log entry. */
@@ -261,23 +307,27 @@ async function runUnderSpinner<
 ): Promise<T> {
   const s = p.spinner();
   const start = Date.now();
-  s.start(labels.running);
+  s.start(fitToWidth(labels.running, ' (999s)'));
   const tick = setInterval(() => {
     const elapsed = Math.round((Date.now() - start) / 1000);
-    s.message(`${labels.running} ${k.dim(`(${elapsed}s)`)}`);
+    const suffix = ` (${elapsed}s)`;
+    s.message(`${fitToWidth(labels.running, suffix)}${k.dim(suffix)}`);
   }, 1000);
 
   const result = await work();
 
   clearInterval(tick);
   const elapsed = Math.round((Date.now() - start) / 1000);
+  const suffix = ` (${elapsed}s)`;
   if (result.ok) {
     const isSkipped = result.terminal?.fields.STATUS === 'skipped';
     const msg = isSkipped && labels.skipped ? labels.skipped : labels.done;
-    s.stop(`${msg} ${k.dim(`(${elapsed}s)`)}`);
+    // Bold the outcome so the step's headline reads stronger than the prose
+    // body copy around it. The trailing `(Ns)` timing stays dim.
+    s.stop(`${k.bold(fitToWidth(msg, suffix))}${k.dim(suffix)}`);
   } else {
     const failMsg = labels.failed ?? labels.running.replace(/…$/, ' failed');
-    s.stop(`${failMsg} ${k.dim(`(${elapsed}s)`)}`, 1);
+    s.stop(`${k.bold(fitToWidth(failMsg, suffix))}${k.dim(suffix)}`, 1);
     dumpTranscriptOnFailure(result.transcript);
   }
   return result;
@@ -301,12 +351,54 @@ export function dumpTranscriptOnFailure(transcript: string): void {
  * Abort the setup run with a user-facing error, logging the abort to the
  * progression log. Takes the step name explicitly so callers are clear
  * about which step they're failing from — no hidden module state.
+ *
+ * Before aborting we offer Claude-assisted debugging. Callers must
+ * `await fail(...)` so the offer can actually run before we call
+ * process.exit. The return type is `Promise<never>`; control-flow
+ * narrowing still works after `await`.
  */
-export function fail(stepName: string, msg: string, hint?: string): never {
+export async function fail(
+  stepName: string,
+  msg: string,
+  hint?: string,
+  rawLogPath?: string,
+): Promise<never> {
   setupLog.abort(stepName, msg);
+  phEmit('setup_aborted', { step: stepName, reason: msg });
   p.log.error(msg);
   if (hint) p.log.message(k.dim(hint));
   p.log.message(k.dim('Logs: logs/setup.log · Raw: logs/setup-steps/'));
+
+  const ranFix = await offerClaudeAssist({ stepName, msg, hint, rawLogPath });
+
+  // If the user just ran a Claude-suggested fix, offer to resume the flow
+  // at the step that failed instead of aborting. We re-exec via spawnSync
+  // and pass NANOCLAW_SKIP with every step that already completed so the
+  // child skips them and picks up where we left off.
+  if (ranFix) {
+    const retry = ensureAnswer(
+      await p.confirm({
+        message: `Fix applied. Retry the ${stepName} step?`,
+        initialValue: true,
+      }),
+    );
+    if (retry) {
+      const existingSkip = (process.env.NANOCLAW_SKIP ?? '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const skipList = [
+        ...new Set([...existingSkip, ...setupLog.completedStepNames()]),
+      ].join(',');
+      p.log.step(`Retrying from ${stepName}…`);
+      const result = spawnSync('pnpm', ['--silent', 'run', 'setup:auto'], {
+        stdio: 'inherit',
+        env: { ...process.env, NANOCLAW_SKIP: skipList },
+      });
+      process.exit(result.status ?? 0);
+    }
+  }
+
   p.cancel('Setup aborted.');
   process.exit(1);
 }

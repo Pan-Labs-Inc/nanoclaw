@@ -23,12 +23,13 @@
  * entries in logs/setup.log, full raw output in per-step files under
  * logs/setup-steps/. See docs/setup-flow.md.
  */
-import { spawn } from 'child_process';
-
 import * as p from '@clack/prompts';
 import k from 'kleur';
 
 import * as setupLog from '../logs.js';
+import { brightSelect } from '../lib/bright-select.js';
+import { confirmThenOpen } from '../lib/browser.js';
+import { askOperatorRole } from '../lib/role-prompt.js';
 import { ensureAnswer, fail, runQuietChild } from '../lib/runner.js';
 
 const DEFAULT_AGENT_NAME = 'Nano';
@@ -46,15 +47,27 @@ interface AppInfo {
 }
 
 export async function runDiscordChannel(displayName: string): Promise<void> {
-  if (!(await askHasBotToken())) {
+  const hasBot = await askHasBotToken();
+  if (!hasBot) {
     await walkThroughBotCreation();
   }
+  // Even users who said "yes" often can't find the token on demand — the
+  // Dev Portal resets it if you don't store it, and people forget which
+  // app it belongs to. A quick reminder before the paste prompt is cheap.
+  showTokenLocationReminder(hasBot);
 
   const token = await collectDiscordToken();
   const botUsername = await validateDiscordToken(token);
   const app = await fetchApplicationInfo(token);
 
   const ownerUserId = await resolveOwnerUserId(app.owner);
+
+  // Before inviting: do they have a server to invite into? Walkthrough if
+  // not — a fresh Discord account without a server makes the invite page a
+  // dead end.
+  if (!(await askHasDiscordServer())) {
+    await walkThroughServerCreation();
+  }
 
   await promptInviteBot(app.applicationId, botUsername);
 
@@ -79,7 +92,7 @@ export async function runDiscordChannel(displayName: string): Promise<void> {
     },
   );
   if (!install.ok) {
-    fail(
+    await fail(
       'discord-install',
       "Couldn't connect Discord.",
       'See logs/setup-steps/ for details, then retry setup.',
@@ -88,6 +101,9 @@ export async function runDiscordChannel(displayName: string): Promise<void> {
 
   const dmChannelId = await openDmChannel(token, ownerUserId);
   const platformId = `discord:@me:${dmChannelId}`;
+
+  const role = await askOperatorRole('Discord');
+  setupLog.userInput('discord_role', role);
 
   const agentName = await resolveAgentName();
 
@@ -101,6 +117,7 @@ export async function runDiscordChannel(displayName: string): Promise<void> {
       '--platform-id', platformId,
       '--display-name', displayName,
       '--agent-name', agentName,
+      '--role', role,
     ],
     {
       running: `Connecting ${agentName} to your Discord DMs…`,
@@ -115,7 +132,7 @@ export async function runDiscordChannel(displayName: string): Promise<void> {
     },
   );
   if (!init.ok) {
-    fail(
+    await fail(
       'init-first-agent',
       `Couldn't finish connecting ${agentName}.`,
       'Most likely the bot and you don\'t share a server yet — invite the bot, then retry later with `/manage-channels`.',
@@ -125,7 +142,7 @@ export async function runDiscordChannel(displayName: string): Promise<void> {
 
 async function askHasBotToken(): Promise<boolean> {
   const answer = ensureAnswer(
-    await p.select({
+    await brightSelect({
       message: 'Do you already have a Discord bot?',
       options: [
         { value: 'yes', label: 'Yes, I have a bot token ready' },
@@ -147,15 +164,75 @@ async function walkThroughBotCreation(): Promise<void> {
       '  3. On the same tab, enable "Message Content Intent"',
       '     (under Privileged Gateway Intents)',
       '',
-      k.dim(`Opening ${url} …`),
+      k.dim(url),
     ].join('\n'),
     'Create a Discord bot',
   );
-  openUrl(url);
+  await confirmThenOpen(url, 'Press Enter to open the Developer Portal');
 
   ensureAnswer(
     await p.confirm({
       message: "Got your bot token?",
+      initialValue: true,
+    }),
+  );
+}
+
+function showTokenLocationReminder(hasExistingBot: boolean): void {
+  // If we just walked them through creating a bot, they're staring at the
+  // token. If they came in with an existing one, they may still need a nudge
+  // to find it — tokens in the Dev Portal aren't visible after first reveal,
+  // and "Reset Token" issues a new one.
+  if (hasExistingBot) {
+    p.note(
+      [
+        "Where to find your bot token:",
+        '',
+        '  1. discord.com/developers/applications → pick your app',
+        '  2. "Bot" tab → "Reset Token" (the old one stops working)',
+        '  3. Copy the new token',
+      ].join('\n'),
+      'Reminder',
+    );
+  }
+}
+
+async function askHasDiscordServer(): Promise<boolean> {
+  const answer = ensureAnswer(
+    await brightSelect({
+      message: 'Do you have a Discord server you can add the bot to?',
+      options: [
+        { value: 'yes', label: 'Yes, I have a server' },
+        { value: 'no', label: "No, walk me through creating one" },
+      ],
+    }),
+  );
+  setupLog.userInput('discord_has_server', String(answer));
+  return answer === 'yes';
+}
+
+async function walkThroughServerCreation(): Promise<void> {
+  // Discord doesn't have a stable deep-link for "create server" so we open
+  // the web client and rely on the + button being visible. The steps below
+  // are the same whether they're in the desktop app or the browser.
+  const url = 'https://discord.com/channels/@me';
+  p.note(
+    [
+      "A Discord server is just a private space for you and the bot. Free and takes 30 seconds.",
+      '',
+      '  1. In Discord, click the "+" at the bottom of the server list',
+      '  2. Choose "Create My Own" → "For me and my friends"',
+      '  3. Give it any name (e.g. "NanoClaw")',
+      '',
+      k.dim(url),
+    ].join('\n'),
+    'Create a Discord server',
+  );
+  await confirmThenOpen(url, 'Press Enter to open Discord');
+
+  ensureAnswer(
+    await p.confirm({
+      message: "Server created?",
       initialValue: true,
     }),
   );
@@ -212,7 +289,7 @@ async function validateDiscordToken(token: string): Promise<string> {
     setupLog.step('discord-validate', 'failed', Date.now() - start, {
       ERROR: reason,
     });
-    fail(
+    await fail(
       'discord-validate',
       "Discord didn't accept that token.",
       'Copy the token again from the Developer Portal and retry setup.',
@@ -224,7 +301,7 @@ async function validateDiscordToken(token: string): Promise<string> {
     setupLog.step('discord-validate', 'failed', Date.now() - start, {
       ERROR: message,
     });
-    fail(
+    await fail(
       'discord-validate',
       "Couldn't reach Discord.",
       'Check your internet connection and retry setup.',
@@ -254,7 +331,7 @@ async function fetchApplicationInfo(token: string): Promise<AppInfo> {
       setupLog.step('discord-app-info', 'failed', Date.now() - start, {
         ERROR: reason,
       });
-      fail(
+      await fail(
         'discord-app-info',
         "Couldn't read your Discord application details.",
         'Re-run setup. If it keeps failing, check the bot token has the right scopes.',
@@ -284,7 +361,7 @@ async function fetchApplicationInfo(token: string): Promise<AppInfo> {
     setupLog.step('discord-app-info', 'failed', Date.now() - start, {
       ERROR: message,
     });
-    fail(
+    await fail(
       'discord-app-info',
       "Couldn't reach Discord.",
       'Check your internet connection and retry setup.',
@@ -360,11 +437,11 @@ async function promptInviteBot(
       '  1. Pick any server you\'re in (a personal one is fine)',
       '  2. Click "Authorize"',
       '',
-      k.dim(`Opening ${url}`),
+      k.dim(url),
     ].join('\n'),
     'Add bot to a server',
   );
-  openUrl(url);
+  await confirmThenOpen(url, 'Press Enter to open the invite page');
 
   ensureAnswer(
     await p.confirm({
@@ -395,7 +472,7 @@ async function openDmChannel(token: string, userId: string): Promise<string> {
       setupLog.step('discord-open-dm', 'failed', Date.now() - start, {
         ERROR: reason,
       });
-      fail(
+      await fail(
         'discord-open-dm',
         "Couldn't open a DM channel with you.",
         'Make sure the bot is in a server you\'re also in, then retry setup.',
@@ -413,7 +490,7 @@ async function openDmChannel(token: string, userId: string): Promise<string> {
     setupLog.step('discord-open-dm', 'failed', Date.now() - start, {
       ERROR: message,
     });
-    fail(
+    await fail(
       'discord-open-dm',
       "Couldn't reach Discord.",
       'Check your internet connection and retry setup.',
@@ -439,17 +516,3 @@ async function resolveAgentName(): Promise<string> {
   return value;
 }
 
-/** Best-effort open of a URL in the user's default browser. Silent on failure. */
-function openUrl(url: string): void {
-  try {
-    const cmd = process.platform === 'darwin' ? 'open' : 'xdg-open';
-    const child = spawn(cmd, [url], { stdio: 'ignore', detached: true });
-    child.on('error', () => {
-      // Headless / no browser / unknown command — the URL is already
-      // printed in the note above, so the user can copy-paste.
-    });
-    child.unref();
-  } catch {
-    // swallow — URL is visible in the note.
-  }
-}

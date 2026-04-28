@@ -16,7 +16,13 @@ cd "$PROJECT_ROOT"
 
 # Keep in sync with .claude/skills/add-telegram/SKILL.md.
 ADAPTER_VERSION="@chat-adapter/telegram@4.26.0"
-CHANNELS_BRANCH="origin/channels"
+
+# Resolve which remote carries the channels branch — handles forks where
+# upstream lives on a different remote than `origin`.
+# shellcheck source=setup/lib/channels-remote.sh
+source "$PROJECT_ROOT/setup/lib/channels-remote.sh"
+CHANNELS_REMOTE=$(resolve_channels_remote)
+CHANNELS_BRANCH="${CHANNELS_REMOTE}/channels"
 
 emit_status() {
   local status=$1 error=${2:-}
@@ -53,8 +59,8 @@ ADAPTER_ALREADY_INSTALLED=true
 if need_install; then
   ADAPTER_ALREADY_INSTALLED=false
   log "Fetching channels branch…"
-  git fetch origin channels >&2 2>/dev/null || {
-    emit_status failed "git fetch origin channels failed"
+  git fetch "$CHANNELS_REMOTE" channels >&2 2>/dev/null || {
+    emit_status failed "git fetch ${CHANNELS_REMOTE} channels failed"
     exit 1
   }
 
@@ -119,7 +125,8 @@ else
 fi
 
 # Look up the bot username (auto.ts already validated; we re-query here so
-# standalone invocations still work).
+# standalone invocations still work — BOT_USERNAME is emitted in the status
+# block for parent drivers to display).
 INFO=$(curl -fsS --max-time 8 \
   "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe" 2>/dev/null || true)
 BOT_USERNAME=""
@@ -131,32 +138,21 @@ fi
 mkdir -p data/env
 cp .env data/env/env
 
-# Deep-link into the bot's chat so the user is already on the right screen
-# when pair-telegram prints the code. Silent best-effort — runs under a
-# spinner, any output (from `open` / `xdg-open`) goes to the raw log.
-if [ -n "$BOT_USERNAME" ]; then
-  case "$(uname -s)" in
-    Darwin)
-      open "tg://resolve?domain=${BOT_USERNAME}" >&2 2>/dev/null \
-        || open "https://t.me/${BOT_USERNAME}" >&2 2>/dev/null \
-        || true
-      ;;
-    Linux)
-      xdg-open "tg://resolve?domain=${BOT_USERNAME}" >&2 2>/dev/null \
-        || xdg-open "https://t.me/${BOT_USERNAME}" >&2 2>/dev/null \
-        || true
-      ;;
-  esac
-fi
+# Browser/app deep-link is done by the parent driver (setup/channels/telegram.ts)
+# BEFORE this script runs — gated on a clack confirm so focus-stealing doesn't
+# surprise the user. Keeping it out of here means this script stays pure
+# non-interactive install.
 
 log "Restarting service so the new adapter picks up the token…"
+# shellcheck source=setup/lib/install-slug.sh
+source "$PROJECT_ROOT/setup/lib/install-slug.sh"
 case "$(uname -s)" in
   Darwin)
-    launchctl kickstart -k "gui/$(id -u)/com.nanoclaw" >&2 2>/dev/null || true
+    launchctl kickstart -k "gui/$(id -u)/$(launchd_label)" >&2 2>/dev/null || true
     ;;
   Linux)
-    systemctl --user restart nanoclaw >&2 2>/dev/null \
-      || sudo systemctl restart nanoclaw >&2 2>/dev/null \
+    systemctl --user restart "$(systemd_unit)" >&2 2>/dev/null \
+      || sudo systemctl restart "$(systemd_unit)" >&2 2>/dev/null \
       || true
     ;;
 esac

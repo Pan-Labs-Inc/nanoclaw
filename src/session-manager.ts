@@ -14,6 +14,7 @@ import type Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
 
+import { isSafeAttachmentName } from './attachment-safety.js';
 import type { OutboundFile } from './channels/adapter.js';
 import { DATA_DIR } from './config.js';
 import { getMessagingGroup } from './db/messaging-groups.js';
@@ -252,11 +253,26 @@ function extractAttachmentFiles(
   let changed = false;
   for (const att of attachments) {
     if (typeof att.data === 'string') {
+      // The name field is attacker-controlled: chat platforms with E2E
+      // attachment encryption (WhatsApp, Matrix) cannot sanitize filename
+      // server-side, and other adapters pass att.name through raw. Without
+      // this guard, `path.join(inboxDir, '../../...')` writes anywhere the
+      // host process has fs permission — see Signal Desktop's Nov 2025
+      // attachment-fileName advisory for the same archetype.
+      const rawName = (att.name as string | undefined) ?? `attachment-${Date.now()}`;
+      const filename = isSafeAttachmentName(rawName) ? rawName : `attachment-${Date.now()}`;
+      if (filename !== rawName) {
+        log.warn('Refused unsafe attachment filename — would escape inbox', {
+          messageId,
+          rawName,
+          replacement: filename,
+        });
+      }
       const inboxDir = path.join(sessionDir(agentGroupId, sessionId), 'inbox', messageId);
       fs.mkdirSync(inboxDir, { recursive: true });
-      const filename = (att.name as string) || `attachment-${Date.now()}`;
       const filePath = path.join(inboxDir, filename);
       fs.writeFileSync(filePath, Buffer.from(att.data as string, 'base64'));
+      att.name = filename;
       att.localPath = `inbox/${messageId}/${filename}`;
       delete att.data;
       changed = true;
@@ -277,6 +293,34 @@ export function openInboundDb(agentGroupId: string, sessionId: string): Database
 /** Open the outbound DB for a session (host reads only). */
 export function openOutboundDb(agentGroupId: string, sessionId: string): Database.Database {
   return openOutboundDbRaw(outboundDbPath(agentGroupId, sessionId));
+}
+
+/**
+ * Write a message directly to a session's outbound DB so the host delivery
+ * loop picks it up. Used by the command gate to send denial responses
+ * without waking a container.
+ */
+export function writeOutboundDirect(
+  agentGroupId: string,
+  sessionId: string,
+  message: {
+    id: string;
+    kind: string;
+    platformId: string | null;
+    channelType: string | null;
+    threadId: string | null;
+    content: string;
+  },
+): void {
+  const db = openOutboundDb(agentGroupId, sessionId);
+  try {
+    db.prepare(
+      `INSERT OR IGNORE INTO messages_out (id, seq, timestamp, kind, platform_id, channel_type, thread_id, content)
+       VALUES (?, (SELECT COALESCE(MAX(seq), 0) + 2 FROM messages_out), datetime('now'), ?, ?, ?, ?, ?)`,
+    ).run(message.id, message.kind, message.platformId, message.channelType, message.threadId, message.content);
+  } finally {
+    db.close();
+  }
 }
 
 /**

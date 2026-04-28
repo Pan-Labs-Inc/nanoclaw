@@ -7,10 +7,11 @@
  *   1. BotFather instructions (clack note)
  *   2. Paste the bot token (clack password) — format-validated
  *   3. getMe via the Bot API to resolve the bot's username
- *   4. Install the adapter (setup/add-telegram.sh, non-interactive)
- *   5. Run the pair-telegram step, rendering code events as clack notes
- *   6. Ask for the messaging-agent name (defaulting to "Nano")
- *   7. Wire the agent via scripts/init-first-agent.ts
+ *   4. Confirm + deep-link into the bot's Telegram chat (tg://resolve)
+ *   5. Install the adapter (setup/add-telegram.sh, non-interactive)
+ *   6. Run the pair-telegram step, rendering code events as clack notes
+ *   7. Ask for the messaging-agent name (defaulting to "Nano")
+ *   8. Wire the agent via scripts/init-first-agent.ts
  *
  * All output obeys the three-level contract: clack UI for the user,
  * structured entries in logs/setup.log, full raw output in per-step files
@@ -20,6 +21,8 @@ import * as p from '@clack/prompts';
 import k from 'kleur';
 
 import * as setupLog from '../logs.js';
+import { confirmThenOpen } from '../lib/browser.js';
+import { askOperatorRole } from '../lib/role-prompt.js';
 import {
   type Block,
   type StepResult,
@@ -38,6 +41,22 @@ export async function runTelegramChannel(displayName: string): Promise<void> {
   const token = await collectTelegramToken();
   const botUsername = await validateTelegramToken(token);
 
+  // Deep-link the user into the bot's chat so they're on the right screen
+  // by the time pair-telegram prints the code. https://t.me/<bot> works
+  // everywhere: browsers show an "Open in Telegram" button when the app is
+  // installed, or the bot's web profile if not. tg://resolve?domain= is
+  // more direct but silently fails when the scheme isn't registered.
+  const botUrl = `https://t.me/${botUsername}`;
+  p.note(
+    [
+      `Opening @${botUsername} in Telegram so it's ready when the pairing code shows up.`,
+      '',
+      k.dim(botUrl),
+    ].join('\n'),
+    'Open Telegram',
+  );
+  await confirmThenOpen(botUrl, 'Press Enter to open Telegram');
+
   const install = await runQuietChild(
     'telegram-install',
     'bash',
@@ -52,7 +71,7 @@ export async function runTelegramChannel(displayName: string): Promise<void> {
     },
   );
   if (!install.ok) {
-    fail(
+    await fail(
       'telegram-install',
       "Couldn't connect Telegram.",
       'See logs/setup-steps/ for details, then retry setup.',
@@ -61,7 +80,7 @@ export async function runTelegramChannel(displayName: string): Promise<void> {
 
   const pair = await runPairTelegram();
   if (!pair.ok) {
-    fail(
+    await fail(
       'pair-telegram',
       "Couldn't pair with Telegram.",
       'Re-run setup to try again.',
@@ -71,12 +90,15 @@ export async function runTelegramChannel(displayName: string): Promise<void> {
   const platformId = pair.terminal?.fields.PLATFORM_ID;
   const pairedUserId = pair.terminal?.fields.PAIRED_USER_ID;
   if (!platformId || !pairedUserId) {
-    fail(
+    await fail(
       'pair-telegram',
       'Pairing completed but came back incomplete.',
       'Re-run setup to try again.',
     );
   }
+
+  const role = await askOperatorRole('Telegram');
+  setupLog.userInput('telegram_role', role);
 
   const agentName = await resolveAgentName();
 
@@ -90,6 +112,7 @@ export async function runTelegramChannel(displayName: string): Promise<void> {
       '--platform-id', platformId,
       '--display-name', displayName,
       '--agent-name', agentName,
+      '--role', role,
     ],
     {
       running: `Connecting ${agentName} to your Telegram chat…`,
@@ -100,7 +123,7 @@ export async function runTelegramChannel(displayName: string): Promise<void> {
     },
   );
   if (!init.ok) {
-    fail(
+    await fail(
       'init-first-agent',
       `Couldn't finish connecting ${agentName}.`,
       'You can retry later with `/manage-channels`.',
@@ -170,7 +193,7 @@ async function validateTelegramToken(token: string): Promise<string> {
     setupLog.step('telegram-validate', 'failed', Date.now() - start, {
       ERROR: reason,
     });
-    fail(
+    await fail(
       'telegram-validate',
       "Telegram didn't accept that token.",
       'Copy the token again from @BotFather and try setup once more.',
@@ -182,7 +205,7 @@ async function validateTelegramToken(token: string): Promise<string> {
     setupLog.step('telegram-validate', 'failed', Date.now() - start, {
       ERROR: message,
     });
-    fail(
+    await fail(
       'telegram-validate',
       "Couldn't reach Telegram.",
       'Check your internet connection and retry setup.',

@@ -30,6 +30,16 @@ const PROGRESS_LOG = path.join(LOGS_DIR, 'setup.log');
 export const progressLogPath = PROGRESS_LOG;
 export const stepsDir = STEPS_DIR;
 
+// Track steps that finished cleanly in this run. Used by fail() to build
+// a NANOCLAW_SKIP list when re-executing after a Claude-assisted fix, so
+// the retry picks up at the failing step instead of redoing every step
+// before it.
+const completedInRun = new Set<string>();
+
+export function completedStepNames(): string[] {
+  return [...completedInRun];
+}
+
 /** Wipe prior logs and write a header. Called once per fresh run (by nanoclaw.sh or as a fallback by auto.ts if invoked standalone). */
 export function reset(meta: Record<string, string>): void {
   if (fs.existsSync(STEPS_DIR)) {
@@ -71,6 +81,10 @@ export function step(
   if (rawRel) lines.push(`  raw: ${rawRel}`);
   lines.push('');
   fs.appendFileSync(PROGRESS_LOG, lines.join('\n') + '\n');
+
+  if (status === 'success' || status === 'skipped') {
+    completedInRun.add(name);
+  }
 }
 
 /** A user answered a prompt. Logs as its own entry because the setup path depends on it. */
