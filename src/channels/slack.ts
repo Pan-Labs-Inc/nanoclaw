@@ -16,6 +16,15 @@ registerChannelAdapter('slack', {
       botToken: env.SLACK_BOT_TOKEN,
       signingSecret: env.SLACK_SIGNING_SECRET,
     });
-    return createChatSdkBridge({ adapter: slackAdapter, concurrency: 'concurrent', supportsThreads: true });
+    const bridge = createChatSdkBridge({ adapter: slackAdapter, concurrency: 'concurrent', supportsThreads: true });
+    bridge.resolveChannelName = async (platformId: string) => {
+      try {
+        const info = await slackAdapter.fetchThread(platformId);
+        return (info as { channelName?: string }).channelName ?? null;
+      } catch {
+        return null;
+      }
+    };
+    return bridge;
   },
 });
