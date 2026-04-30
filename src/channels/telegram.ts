@@ -210,6 +210,7 @@ registerChannelAdapter('telegram', {
       extractReplyContext,
       supportsThreads: false,
       transformOutboundText: sanitizeTelegramLegacyMarkdown,
+      maxTextLength: 4000,
     });
 
     const botUsernamePromise = fetchBotUsername(token);
