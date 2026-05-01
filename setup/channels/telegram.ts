@@ -21,7 +21,7 @@ import * as p from '@clack/prompts';
 import k from 'kleur';
 
 import * as setupLog from '../logs.js';
-import { confirmThenOpen } from '../lib/browser.js';
+import { confirmThenOpen, formatNoteLink } from '../lib/browser.js';
 import { askOperatorRole } from '../lib/role-prompt.js';
 import {
   type Block,
@@ -33,6 +33,7 @@ import {
   spawnStep,
   writeStepEntry,
 } from '../lib/runner.js';
+import { readEnvKey } from '../environment.js';
 import { accentGreen, brandBold, fitToWidth, fmtDuration, note } from '../lib/theme.js';
 
 const DEFAULT_AGENT_NAME = 'Nano';
@@ -50,9 +51,8 @@ export async function runTelegramChannel(displayName: string): Promise<void> {
   note(
     [
       `Opening @${botUsername} in Telegram so it's ready when the pairing code shows up.`,
-      '',
-      k.dim(botUrl),
-    ].join('\n'),
+      formatNoteLink(botUrl),
+    ].filter((line): line is string => line !== null).join('\n'),
     'Open Telegram',
   );
   await confirmThenOpen(botUrl, 'Press Enter to open Telegram');
@@ -132,7 +132,7 @@ export async function runTelegramChannel(displayName: string): Promise<void> {
 }
 
 async function collectTelegramToken(): Promise<string> {
-  const existing = process.env.TELEGRAM_BOT_TOKEN?.trim();
+  const existing = readEnvKey('TELEGRAM_BOT_TOKEN');
   if (existing && /^[0-9]+:[A-Za-z0-9_-]{35,}$/.test(existing)) {
     const reuse = ensureAnswer(await p.confirm({
       message: `Found an existing Telegram bot token (${existing.slice(0, 8)}…). Use it?`,
