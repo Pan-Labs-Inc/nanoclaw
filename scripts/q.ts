@@ -4,10 +4,11 @@
  * Usage:
  *   pnpm exec tsx scripts/q.ts <db-path> "<sql>"
  *
- * Detects SELECT vs mutation on the first keyword. SELECT/WITH queries
- * print rows in sqlite3 CLI default ("list") format — pipe-separated,
- * no header — so existing skill text reads identically. Anything else
- * runs through db.exec() and prints nothing on success.
+ * Uses better-sqlite3's stmt.reader property to distinguish queries
+ * (SELECT / WITH...SELECT) from mutations. Queries print rows in
+ * sqlite3 CLI default ("list") format — pipe-separated, no header —
+ * so existing skill text reads identically. Mutations run via
+ * stmt.run() (single statement) or db.exec() (compound).
  *
  * Why this exists: setup/verify.ts:5 codifies that NanoClaw avoids
  * depending on the sqlite3 CLI binary; setup never installs or probes
@@ -28,18 +29,29 @@ if (!dbPath || sql === undefined) {
 
 const db = new Database(dbPath);
 try {
-  const firstKeyword = sql.trim().split(/\s+/)[0]?.toUpperCase() ?? '';
-  if (firstKeyword === 'SELECT' || firstKeyword === 'WITH') {
-    const rows = db.prepare(sql).all() as Record<string, unknown>[];
-    for (const row of rows) {
-      console.log(
-        Object.values(row)
-          .map((v) => (v === null ? '' : String(v)))
-          .join('|'),
-      );
+  try {
+    const stmt = db.prepare(sql);
+    if (stmt.reader) {
+      const rows = stmt.all() as Record<string, unknown>[];
+      for (const row of rows) {
+        console.log(
+          Object.values(row)
+            .map((v) => (v === null ? '' : String(v)))
+            .join('|'),
+        );
+      }
+    } else {
+      stmt.run();
     }
-  } else {
-    db.exec(sql);
+  } catch (e: unknown) {
+    // better-sqlite3 throws on compound statements ("contains more than
+    // one statement"). Compound SQL in skills is always mutations
+    // (e.g. "DELETE ...; INSERT ...;"), so fall back to db.exec().
+    if (e instanceof Error && /more than one statement/i.test(e.message)) {
+      db.exec(sql);
+    } else {
+      throw e;
+    }
   }
 } finally {
   db.close();

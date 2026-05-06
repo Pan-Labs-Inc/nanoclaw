@@ -84,6 +84,17 @@ describe('scripts/q.ts', () => {
     expect(ids).toEqual([2, 9]);
   });
 
+  it('WITH...DELETE is treated as a mutation, not a query', () => {
+    const r = run("WITH stale AS (SELECT id FROM t WHERE name = 'alice') DELETE FROM t WHERE id IN (SELECT id FROM stale)");
+    expect(r.status).toBe(0);
+    expect(r.stdout).toBe('');
+
+    const db = new Database(dbPath, { readonly: true });
+    const rows = db.prepare('SELECT name FROM t').all() as { name: string }[];
+    db.close();
+    expect(rows).toEqual([{ name: 'bob' }]);
+  });
+
   it('exits 2 with usage when args are missing', () => {
     const r = spawnSync('pnpm', ['exec', 'tsx', Q], {
       encoding: 'utf-8',
