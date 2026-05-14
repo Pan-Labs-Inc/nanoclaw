@@ -188,9 +188,62 @@ describe('SMS channel helpers', () => {
         TWILIO_AUTH_TOKEN: '0123456789abcdef',
         TWILIO_MESSAGING_SERVICE_SID: VALID_MESSAGING_SERVICE_SID,
         TWILIO_PHONE_NUMBER: '+15550001111',
+        TWILIO_SMS_WEBHOOK_URL: 'https://example.com/webhook/sms',
+        TWILIO_SMS_STATUS_CALLBACK_URL: 'https://example.com/webhook/sms/status',
       },
       () => {
         expect(readSmsConfig()?.sender).toBe(VALID_MESSAGING_SERVICE_SID);
+      },
+    );
+  });
+
+  it('requires explicit webhook and status callback URLs for Messaging Service SMS at runtime', () => {
+    withSmsEnv(
+      {
+        TWILIO_ACCOUNT_SID: VALID_ACCOUNT_SID,
+        TWILIO_AUTH_TOKEN: '0123456789abcdef',
+        TWILIO_MESSAGING_SERVICE_SID: VALID_MESSAGING_SERVICE_SID,
+      },
+      () => {
+        expect(() => readSmsConfig()).toThrow(/TWILIO_SMS_WEBHOOK_URL/);
+      },
+    );
+
+    withSmsEnv(
+      {
+        TWILIO_ACCOUNT_SID: VALID_ACCOUNT_SID,
+        TWILIO_AUTH_TOKEN: '0123456789abcdef',
+        TWILIO_MESSAGING_SERVICE_SID: VALID_MESSAGING_SERVICE_SID,
+        TWILIO_SMS_WEBHOOK_URL: 'https://example.com/webhook/sms',
+      },
+      () => {
+        expect(() => readSmsConfig()).toThrow(/TWILIO_SMS_STATUS_CALLBACK_URL/);
+      },
+    );
+
+    withSmsEnv(
+      {
+        TWILIO_ACCOUNT_SID: VALID_ACCOUNT_SID,
+        TWILIO_AUTH_TOKEN: '0123456789abcdef',
+        TWILIO_MESSAGING_SERVICE_SID: VALID_MESSAGING_SERVICE_SID,
+        TWILIO_SMS_WEBHOOK_URL: 'https://example.com/webhook/sms',
+        TWILIO_STATUS_CALLBACK_URL: 'https://example.com/webhook/sms/status',
+      },
+      () => {
+        expect(() => readSmsConfig()).toThrow(/TWILIO_SMS_STATUS_CALLBACK_URL/);
+      },
+    );
+
+    withSmsEnv(
+      {
+        TWILIO_ACCOUNT_SID: VALID_ACCOUNT_SID,
+        TWILIO_AUTH_TOKEN: '0123456789abcdef',
+        TWILIO_MESSAGING_SERVICE_SID: VALID_MESSAGING_SERVICE_SID,
+        TWILIO_SMS_WEBHOOK_URL: 'https://example.com/webhook/sms',
+        TWILIO_SMS_STATUS_CALLBACK_URL: 'https://example.com/webhook/sms/status',
+      },
+      () => {
+        expect(readSmsConfig()?.statusCallbackUrl).toBe('https://example.com/webhook/sms/status');
       },
     );
   });
@@ -265,6 +318,7 @@ describe('SMS channel helpers', () => {
         TWILIO_AUTH_TOKEN: '0123456789abcdef',
         TWILIO_MESSAGING_SERVICE_SID: VALID_MESSAGING_SERVICE_SID,
         TWILIO_SMS_WEBHOOK_URL: 'not-a-url',
+        TWILIO_SMS_STATUS_CALLBACK_URL: 'https://example.com/webhook/sms/status',
       },
       () => {
         expect(() => readSmsConfig()).toThrow(/TWILIO_SMS_WEBHOOK_URL/);
@@ -290,7 +344,8 @@ describe('SMS channel helpers', () => {
       {
         TWILIO_ACCOUNT_SID: VALID_ACCOUNT_SID,
         TWILIO_AUTH_TOKEN: '0123456789abcdef',
-        TWILIO_MESSAGING_SERVICE_SID: VALID_MESSAGING_SERVICE_SID,
+        TWILIO_PHONE_NUMBER: '+15550001111',
+        NANOCLAW_SMS_ALLOW_PHONE_SENDER: 'true',
         TWILIO_SMS_WEBHOOK_URL: 'https://example.com/webhook/sms',
       },
       () => {

@@ -95,16 +95,14 @@ export function readSmsConfig(): SmsConfig | null {
 
   const accountSid = envValue(env, 'TWILIO_ACCOUNT_SID');
   const authToken = envValue(env, 'TWILIO_AUTH_TOKEN');
-  const sender =
-    envValue(env, 'TWILIO_MESSAGING_SERVICE_SID') ??
-    envValue(env, 'TWILIO_PHONE_NUMBER') ??
-    envValue(env, 'TWILIO_FROM_NUMBER');
+  const messagingServiceSid = envValue(env, 'TWILIO_MESSAGING_SERVICE_SID');
+  const sender = messagingServiceSid ?? envValue(env, 'TWILIO_PHONE_NUMBER') ?? envValue(env, 'TWILIO_FROM_NUMBER');
 
   if (!accountSid || !authToken || !sender) return null;
   validateSmsConfigEnv({
     accountSid,
     authToken,
-    messagingServiceSid: envValue(env, 'TWILIO_MESSAGING_SERVICE_SID'),
+    messagingServiceSid,
     phoneNumber: envValue(env, 'TWILIO_PHONE_NUMBER'),
     fromNumber: envValue(env, 'TWILIO_FROM_NUMBER'),
     sender,
@@ -118,6 +116,14 @@ export function readSmsConfig(): SmsConfig | null {
   validateHttpUrl(webhookUrl, 'TWILIO_SMS_WEBHOOK_URL');
   validateHttpUrl(smsStatusUrl, 'TWILIO_SMS_STATUS_CALLBACK_URL');
   validateHttpUrl(legacyStatusUrl, 'TWILIO_STATUS_CALLBACK_URL');
+  if (messagingServiceSid) {
+    if (!webhookUrl) {
+      throw new Error('TWILIO_SMS_WEBHOOK_URL is required when TWILIO_MESSAGING_SERVICE_SID is set');
+    }
+    if (!smsStatusUrl) {
+      throw new Error('TWILIO_SMS_STATUS_CALLBACK_URL is required when TWILIO_MESSAGING_SERVICE_SID is set');
+    }
+  }
 
   return {
     accountSid,
