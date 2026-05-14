@@ -110,6 +110,38 @@ async function sendPairingConfirmation(token: string, platformId: string): Promi
   }
 }
 
+/**
+ * Reply to a /chatid command with the numeric chat ID extracted from platformId.
+ * Best-effort — failures are logged and never propagated.
+ */
+async function sendChatIdReply(token: string, platformId: string): Promise<void> {
+  const chatId = platformId.split(':').slice(1).join(':');
+  if (!chatId) return;
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, text: `Chat ID: ${chatId}` }),
+    });
+    if (!res.ok) {
+      log.warn('Telegram /chatid reply non-OK', { status: res.status });
+    }
+  } catch (err) {
+    log.warn('Telegram /chatid reply failed', { err });
+  }
+}
+
+/**
+ * Return true if the message text is a /chatid command addressed to this bot.
+ * Handles DMs (/chatid) and groups where the bot has privacy ON (/chatid@botName).
+ */
+function isChatIdCommand(text: string, botUsername: string): boolean {
+  const trimmed = text.trim();
+  const plain = /^\/chatid$/i.test(trimmed);
+  const addressed = new RegExp(`^/chatid@${botUsername.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i').test(trimmed);
+  return plain || addressed;
+}
+
 function createPairingInterceptor(
   botUsernamePromise: Promise<string | null>,
   hostOnInbound: ChannelSetup['onInbound'],
@@ -125,6 +157,10 @@ function createPairingInterceptor(
       const { text, authorUserId } = readInboundFields(message);
       if (!text) {
         hostOnInbound(platformId, threadId, message);
+        return;
+      }
+      if (isChatIdCommand(text, botUsername)) {
+        await sendChatIdReply(token, platformId);
         return;
       }
       const consumed = await tryConsume({
