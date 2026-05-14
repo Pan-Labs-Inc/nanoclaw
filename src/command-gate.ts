@@ -11,7 +11,7 @@ import { getDb, hasTable } from './db/connection.js';
 
 export type GateResult = { action: 'pass' } | { action: 'filter' } | { action: 'deny'; command: string };
 
-const FILTERED_COMMANDS = new Set(['/help', '/login', '/logout', '/doctor', '/config', '/remote-control']);
+const FILTERED_COMMANDS = new Set(['/help', '/login', '/logout', '/doctor', '/config', '/remote-control', '/chatid']);
 const ADMIN_COMMANDS = new Set(['/clear', '/compact', '/context', '/cost', '/files']);
 
 /**
