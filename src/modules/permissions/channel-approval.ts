@@ -51,6 +51,7 @@ import { getMessagingGroup, updateMessagingGroup } from '../../db/messaging-grou
 import { getDeliveryAdapter } from '../../delivery.js';
 import { initGroupFilesystem } from '../../group-init.js';
 import { log } from '../../log.js';
+import { redactUserId } from '../../platform-redaction.js';
 import type { InboundEvent } from '../../channels/adapter.js';
 import type { AgentGroup } from '../../types.js';
 import { pickApprovalDelivery, pickApprover } from '../approvals/primitive.js';
@@ -229,7 +230,7 @@ export async function requestChannelApproval(input: RequestChannelApprovalInput)
     log.info('Channel registration card delivered', {
       messagingGroupId,
       agentGroupCount: agentGroups.length,
-      approver: delivery.userId,
+      approver: redactUserId(delivery.userId),
     });
   } catch (err) {
     log.error('Channel registration card delivery failed', { messagingGroupId, err });

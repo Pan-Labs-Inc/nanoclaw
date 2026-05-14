@@ -27,6 +27,7 @@ import { createPendingApproval, getSession } from '../../db/sessions.js';
 import { getDeliveryAdapter } from '../../delivery.js';
 import { wakeContainer } from '../../container-runner.js';
 import { log } from '../../log.js';
+import { redactUserId } from '../../platform-redaction.js';
 import { writeSessionMessage } from '../../session-manager.js';
 import type { MessagingGroup, Session } from '../../types.js';
 import { getAdminsOfAgentGroup, getGlobalAdmins, getOwners } from '../permissions/db/user-roles.js';
@@ -216,5 +217,5 @@ export async function requestApproval(opts: RequestApprovalOptions): Promise<voi
     }
   }
 
-  log.info('Approval requested', { action, approvalId, agentName, approver: target.userId });
+  log.info('Approval requested', { action, approvalId, agentName, approver: redactUserId(target.userId) });
 }

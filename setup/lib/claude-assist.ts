@@ -70,6 +70,9 @@ export const STEP_FILES: Record<string, string[]> = {
   'discord-install': ['setup/add-discord.sh', 'setup/channels/discord.ts'],
   'slack-install': ['setup/add-slack.sh', 'setup/channels/slack.ts'],
   'slack-validate': ['setup/channels/slack.ts'],
+  'sms-install': ['setup/add-sms.sh', 'setup/channels/sms.ts'],
+  'sms-validate': ['setup/channels/sms.ts'],
+  'sms-opt-in': ['setup/channels/sms.ts'],
   'imessage-install': ['setup/add-imessage.sh', 'setup/channels/imessage.ts'],
   'imessage': ['setup/channels/imessage.ts'],
   'teams-install': ['setup/add-teams.sh', 'setup/channels/teams.ts'],
@@ -78,6 +81,7 @@ export const STEP_FILES: Record<string, string[]> = {
     'scripts/init-first-agent.ts',
     'setup/channels/telegram.ts',
     'setup/channels/discord.ts',
+    'setup/channels/sms.ts',
   ],
 };
 

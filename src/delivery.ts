@@ -24,6 +24,7 @@ import { log } from './log.js';
 import { normalizeOptions } from './channels/ask-question.js';
 import { clearOutbox, openInboundDb, openOutboundDb, readOutboxFiles } from './session-manager.js';
 import { pauseTypingRefreshAfterDelivery, setTypingAdapter } from './modules/typing/index.js';
+import { redactPlatformId } from './platform-redaction.js';
 import type { OutboundFile } from './channels/adapter.js';
 import type { Session } from './types.js';
 
@@ -364,7 +365,7 @@ async function deliverMessage(
   log.info('Message delivered', {
     id: msg.id,
     channelType: msg.channel_type,
-    platformId: msg.platform_id,
+    platformId: redactPlatformId(msg.channel_type, msg.platform_id),
     platformMsgId,
     fileCount: files?.length,
   });

@@ -16,11 +16,22 @@ import { log } from './log.js';
 const DEFAULT_PORT = 3000;
 
 interface WebhookEntry {
+  kind: 'chat';
   chat: Chat;
   adapterName: string;
 }
 
-const routes = new Map<string, WebhookEntry>();
+export type WebhookHandler = (
+  request: Request,
+  opts: { waitUntil: (p: Promise<unknown>) => void },
+) => Response | Promise<Response>;
+
+interface NativeWebhookEntry {
+  kind: 'native';
+  handler: WebhookHandler;
+}
+
+const routes = new Map<string, WebhookEntry | NativeWebhookEntry>();
 let server: http.Server | null = null;
 
 /** Convert Node.js IncomingMessage to a Web API Request. */
@@ -71,9 +82,22 @@ async function fromWebResponse(webRes: Response, nodeRes: http.ServerResponse): 
  * Starts the server lazily on first call.
  */
 export function registerWebhookAdapter(chat: Chat, adapterName: string): void {
-  routes.set(adapterName, { chat, adapterName });
+  routes.set(adapterName, { kind: 'chat', chat, adapterName });
   ensureServer();
   log.info('Webhook adapter registered', { adapter: adapterName, path: `/webhook/${adapterName}` });
+}
+
+/** Register a native webhook handler on the shared server. */
+export function registerWebhookHandler(name: string, handler: WebhookHandler): void {
+  routes.set(name, { kind: 'native', handler });
+  ensureServer();
+  log.info('Native webhook handler registered', { adapter: name, path: `/webhook/${name}` });
+}
+
+/** Remove a native webhook handler. Chat SDK adapters are cleared on server shutdown. */
+export function unregisterWebhookHandler(name: string): void {
+  const entry = routes.get(name);
+  if (entry?.kind === 'native') routes.delete(name);
 }
 
 function ensureServer(): void {
@@ -102,14 +126,20 @@ function ensureServer(): void {
 
     try {
       const webReq = await toWebRequest(req);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const webhooks = entry.chat.webhooks as Record<string, (r: Request, opts?: any) => Promise<Response>>;
-      const handler = webhooks[entry.adapterName];
-      const webRes = await handler(webReq, {
+      const opts = {
         waitUntil: (p: Promise<unknown>) => {
           p.catch(() => {});
         },
-      });
+      };
+      let webRes: Response;
+      if (entry.kind === 'native') {
+        webRes = await entry.handler(webReq, opts);
+      } else {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const webhooks = entry.chat.webhooks as Record<string, (r: Request, opts?: any) => Promise<Response>>;
+        const handler = webhooks[entry.adapterName];
+        webRes = await handler(webReq, opts);
+      }
       await fromWebResponse(webRes, res);
     } catch (err) {
       log.error('Webhook handler error', { adapter: adapterName, url: req.url, err });
