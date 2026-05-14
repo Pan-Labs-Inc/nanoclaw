@@ -72,6 +72,7 @@ export const STEP_FILES: Record<string, string[]> = {
   'slack-validate': ['setup/channels/slack.ts'],
   'sms-install': ['setup/add-sms.sh', 'setup/channels/sms.ts'],
   'sms-validate': ['setup/channels/sms.ts'],
+  'sms-configure-messaging-service': ['setup/channels/sms.ts'],
   'sms-opt-in': ['setup/channels/sms.ts'],
   'imessage-install': ['setup/add-imessage.sh', 'setup/channels/imessage.ts'],
   'imessage': ['setup/channels/imessage.ts'],

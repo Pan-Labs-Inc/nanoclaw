@@ -29,6 +29,7 @@ import { isHeadless } from '../platform.js';
 import { accentGreen, fmtDuration, note } from '../lib/theme.js';
 
 const TWILIO_CONSOLE_URL = 'https://console.twilio.com/us1/develop/sms/manage/senders';
+const TWILIO_MESSAGING_API_VERSION = 'v1';
 const DEFAULT_AGENT_NAME = 'Nano';
 
 type Sender = { kind: 'phone'; value: string } | { kind: 'messaging-service'; value: string };
@@ -48,6 +49,16 @@ export async function runSmsChannel(displayName: string): Promise<ChannelFlowRes
   const sender = await collectSender();
   const webhookUrl = await collectWebhookUrl();
   const statusCallbackUrl = statusCallbackUrlFor(webhookUrl);
+
+  if (sender.kind === 'messaging-service') {
+    await configureMessagingServiceForSetup({
+      accountSid,
+      authToken,
+      serviceSid: sender.value,
+      inboundRequestUrl: webhookUrl,
+      statusCallbackUrl,
+    });
+  }
 
   const install = await runQuietChild(
     'sms-install',
@@ -143,6 +154,77 @@ export async function runSmsChannel(displayName: string): Promise<ChannelFlowRes
       'init-first-agent',
       `Couldn't finish connecting ${agentName}.`,
       'You can retry later with `/init-first-agent` or `/manage-channels`.',
+    );
+  }
+}
+
+export interface MessagingServiceWebhookConfig {
+  accountSid: string;
+  authToken: string;
+  serviceSid: string;
+  inboundRequestUrl: string;
+  statusCallbackUrl: string;
+  fetchImpl?: typeof fetch;
+}
+
+export async function configureMessagingServiceWebhooks({
+  accountSid,
+  authToken,
+  serviceSid,
+  inboundRequestUrl,
+  statusCallbackUrl,
+  fetchImpl = fetch,
+}: MessagingServiceWebhookConfig): Promise<void> {
+  const params = new URLSearchParams({
+    InboundRequestUrl: inboundRequestUrl,
+    InboundMethod: 'POST',
+    StatusCallback: statusCallbackUrl,
+    UseInboundWebhookOnNumber: 'false',
+  });
+
+  const res = await fetchImpl(
+    `https://messaging.twilio.com/${TWILIO_MESSAGING_API_VERSION}/Services/${encodeURIComponent(serviceSid)}`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Basic ${Buffer.from(`${accountSid}:${authToken}`).toString('base64')}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: params.toString(),
+    },
+  );
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(
+      `Twilio Messaging Service webhook configuration failed (${res.status}): ${sanitizeTwilioText(text).slice(0, 300)}`,
+    );
+  }
+}
+
+async function configureMessagingServiceForSetup(config: MessagingServiceWebhookConfig): Promise<void> {
+  const start = Date.now();
+  const s = p.spinner();
+  s.start('Configuring Twilio Messaging Service webhooks...');
+  try {
+    await configureMessagingServiceWebhooks(config);
+    s.stop(`Twilio Messaging Service webhooks configured. ${k.dim(`(${fmtDuration(Date.now() - start)})`)}`);
+    setupLog.step('sms-configure-messaging-service', 'success', Date.now() - start, {
+      SENDER: maskSender(config.serviceSid),
+      WEBHOOK_URL: config.inboundRequestUrl,
+      STATUS_CALLBACK_URL: config.statusCallbackUrl,
+    });
+  } catch (err) {
+    s.stop(`Couldn't configure Twilio Messaging Service webhooks. ${k.dim(`(${fmtDuration(Date.now() - start)})`)}`, 1);
+    const message = err instanceof Error ? err.message : String(err);
+    setupLog.step('sms-configure-messaging-service', 'failed', Date.now() - start, {
+      SENDER: maskSender(config.serviceSid),
+      ERROR: message,
+    });
+    await fail(
+      'sms-configure-messaging-service',
+      "Couldn't configure Twilio Messaging Service webhooks.",
+      'Check that the Account SID/Auth Token can update this Messaging Service, then retry /add-sms.',
     );
   }
 }
@@ -484,6 +566,10 @@ function statusCallbackUrlFor(webhookUrl: string): string {
   const url = new URL(webhookUrl);
   url.pathname = url.pathname.endsWith('/') ? `${url.pathname}status` : `${url.pathname}/status`;
   return url.toString();
+}
+
+function sanitizeTwilioText(value: string): string {
+  return value.replace(/\+[1-9]\d{7,14}/g, '[redacted-phone]').replace(/%2B[1-9]\d{7,14}/gi, '[redacted-phone]');
 }
 
 function safeJson(text: string): unknown {
