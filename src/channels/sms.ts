@@ -69,6 +69,8 @@ export interface TwilioStatusCallback {
 }
 
 function envValue(env: Record<string, string>, key: string): string | undefined {
+  // Runtime env wins over .env so deploy/test overrides can change one value
+  // without rewriting the persisted NanoClaw env file.
   return process.env[key] || env[key] || undefined;
 }
 
@@ -116,6 +118,9 @@ export function readSmsConfig(): SmsConfig | null {
   validateHttpUrl(webhookUrl, 'TWILIO_SMS_WEBHOOK_URL');
   validateHttpUrl(smsStatusUrl, 'TWILIO_SMS_STATUS_CALLBACK_URL');
   validateHttpUrl(legacyStatusUrl, 'TWILIO_STATUS_CALLBACK_URL');
+  // A Messaging Service is the production path because it can enforce
+  // carrier-standard Advanced Opt-Out. Require both public URLs here so runtime
+  // startup fails before Twilio can keep using stale Console webhook settings.
   if (messagingServiceSid) {
     if (!webhookUrl) {
       throw new Error('TWILIO_SMS_WEBHOOK_URL is required when TWILIO_MESSAGING_SERVICE_SID is set');
@@ -246,6 +251,8 @@ export function extractSmsText(message: OutboundMessage): string | null {
   if (typeof content === 'string') return stripSmsMarkdown(content);
   if (!content || typeof content !== 'object') return null;
 
+  // Other channels can deliver structured cards/questions. SMS cannot, so this
+  // is the channel-specific plain-text projection before Twilio delivery.
   const payload = content as Record<string, unknown>;
   if (payload.type === 'ask_question') return stripSmsMarkdown(renderAskQuestion(payload) ?? '');
   if (payload.type === 'card') return stripSmsMarkdown(renderCard(payload) ?? '');
@@ -315,6 +322,9 @@ export function validateTwilioSignature(
 ): boolean {
   if (!signature) return false;
 
+  // Twilio signs the exact public URL plus sorted form parameters. Behind a
+  // proxy, publicUrl must match the URL configured in Twilio, not necessarily
+  // the local request URL seen by NanoClaw.
   const signedPayload =
     publicUrl +
     [...new Set([...params.keys()])]
@@ -405,6 +415,9 @@ export function createSmsWebhookHandler(config: SmsConfig, hostConfig: ChannelSe
     if (!inbound.from) return textResponse('Missing From', 400);
     if (!E164_PHONE_RE.test(inbound.from)) return textResponse('Invalid From', 400);
 
+    // Control keywords are handled before agent routing. If Twilio Advanced
+    // Opt-Out included OptOutType, Twilio owns the user-facing keyword reply;
+    // NanoClaw only mirrors the state locally for outbound suppression.
     const control = handleSmsControlMessage(inbound.from, inbound.body, config, inbound.optOutType);
     if (control) return twimlResponse(control.reply);
 
@@ -458,6 +471,8 @@ function handleSmsControlMessage(
   if (!keyword) return null;
   const action = optOutAction ?? parseSmsControlAction(keyword);
   if (!action) return null;
+  // Avoid double replies for Twilio-managed HELP/STOP/START. Twilio sends the
+  // carrier-compliant response, while NanoClaw records the same event locally.
   const replyHandledByTwilio = !!optOutAction;
 
   if (action === 'stop') {
@@ -480,6 +495,9 @@ function handleSmsControlMessage(
 }
 
 interface SmsOptOutStore {
+  // Local suppression is a fail-safe mirror of SMS consent state. Twilio remains
+  // the carrier-facing enforcement point, but NanoClaw checks this store before
+  // every outbound send so STOP works even before a provider-side lookup exists.
   optedOut: Record<string, { optedOutAt: string }>;
   controlEvents: Record<string, { action: SmsControlAction; keyword: string; receivedAt: string }>;
 }
@@ -488,6 +506,8 @@ export function isSmsOptedOut(phone: string, config: SmsConfig): boolean {
   try {
     return !!readSmsOptOutStore(config).optedOut[normalizePhoneKey(phone)];
   } catch (err) {
+    // Consent failures must fail closed: if the suppression file is corrupt or
+    // unreadable, sending is riskier than dropping the outbound SMS.
     log.error('SMS opt-out store is unreadable; suppressing outbound SMS fail closed', {
       phone: redactSmsPhone(phone),
       storePath: smsOptOutStorePath(config),
@@ -580,6 +600,9 @@ function writeSmsOptOutStore(config: SmsConfig, store: SmsOptOutStore): void {
   const storePath = smsOptOutStorePath(config);
   fs.mkdirSync(path.dirname(storePath), { recursive: true });
   const tmp = `${storePath}.tmp`;
+  // Atomic replace keeps readers from seeing a partial JSON write. The explicit
+  // chmods preserve owner-only access even on filesystems that ignore writeFile
+  // mode when replacing an existing path.
   fs.writeFileSync(tmp, `${JSON.stringify(store, null, 2)}\n`, { mode: SMS_OPT_OUT_STORE_MODE });
   fs.chmodSync(tmp, SMS_OPT_OUT_STORE_MODE);
   fs.renameSync(tmp, storePath);
@@ -648,6 +671,9 @@ export function recordSmsDeliveryStatus(platformMessageId: string, status: strin
   }
 
   let changes = 0;
+  // Twilio status callbacks identify only the Twilio message SID. Delivered
+  // rows live in per-session SQLite files, so fan out across active sessions
+  // and update whichever one owns the platform message id.
   for (const session of sessions) {
     let db;
     try {
@@ -721,6 +747,8 @@ function verifyRequestSignature(
   configuredUrl: string | undefined,
 ): boolean {
   if (!config.validateSignature) return true;
+  // Prefer the configured public URL because reverse proxies often rewrite
+  // scheme/host before the request reaches this process.
   return validateTwilioSignature(
     config.authToken,
     configuredUrl || publicRequestUrl(request),

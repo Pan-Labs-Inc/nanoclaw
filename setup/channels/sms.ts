@@ -51,6 +51,9 @@ export async function runSmsChannel(displayName: string): Promise<ChannelFlowRes
   const statusCallbackUrl = statusCallbackUrlFor(webhookUrl);
 
   if (sender.kind === 'messaging-service') {
+    // Messaging Services are the production path. Configure Twilio via API so
+    // NanoClaw's persisted env and Twilio's Console state cannot drift during
+    // setup; phone-number senders remain a local/dev fallback.
     await configureMessagingServiceForSetup({
       accountSid,
       authToken,
@@ -71,6 +74,9 @@ export async function runSmsChannel(displayName: string): Promise<ChannelFlowRes
     },
     {
       env: {
+        // setup/add-sms.sh is the persistence boundary. Secrets are passed via
+        // child env so the setup UI can mask them while the script writes the
+        // final .env/data/env values in the same shape runtime reads.
         TWILIO_ACCOUNT_SID: accountSid,
         TWILIO_AUTH_TOKEN: authToken,
         TWILIO_PHONE_NUMBER: sender.kind === 'phone' ? sender.value : '',
@@ -175,6 +181,10 @@ export async function configureMessagingServiceWebhooks({
   statusCallbackUrl,
   fetchImpl = fetch,
 }: MessagingServiceWebhookConfig): Promise<void> {
+  // UseInboundWebhookOnNumber=false makes the Messaging Service webhook
+  // authoritative instead of allowing an individual Twilio number to override
+  // inbound routing. Keep status callbacks beside inbound so smoke tests can
+  // verify the full service config through Twilio's API.
   const params = new URLSearchParams({
     InboundRequestUrl: inboundRequestUrl,
     InboundMethod: 'POST',
@@ -377,6 +387,8 @@ async function validateTwilioCredentials(accountSid: string, authToken: string):
 async function collectSender(): Promise<Sender> {
   const existingMessagingService = envValue('TWILIO_MESSAGING_SERVICE_SID');
   const existingPhone = envValue('TWILIO_PHONE_NUMBER') ?? envValue('TWILIO_FROM_NUMBER');
+  // Prefer MG... when both env forms exist. It carries Advanced Opt-Out and
+  // avoids production accidentally falling back to a bare Twilio number.
   const existing =
     existingMessagingService && isMessagingServiceSid(existingMessagingService)
       ? ({ kind: 'messaging-service', value: existingMessagingService } as Sender)
@@ -509,6 +521,8 @@ function showTwilioWebhookChecklist(webhookUrl: string, statusCallbackUrl: strin
       `  Status callback URL:      ${statusCallbackUrl}`,
       '  Method:                   POST',
       '',
+      'Those URLs must be byte-for-byte the same public URLs NanoClaw uses for',
+      'Twilio signature validation.',
       'Keep signature validation enabled. If a proxy rewrites the URL, update',
       'TWILIO_SMS_WEBHOOK_URL and TWILIO_SMS_STATUS_CALLBACK_URL so they exactly',
       "match Twilio's configured URLs.",
