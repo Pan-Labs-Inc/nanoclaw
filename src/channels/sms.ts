@@ -68,18 +68,21 @@ export interface TwilioStatusCallback {
   errorMessage?: string;
 }
 
+/** Resolve an SMS env key, preferring process-level overrides over .env. */
 function envValue(env: Record<string, string>, key: string): string | undefined {
   // Runtime env wins over .env so deploy/test overrides can change one value
   // without rewriting the persisted NanoClaw env file.
   return process.env[key] || env[key] || undefined;
 }
 
+/** Parse a permissive boolean env value with a caller-provided default. */
 function envBool(env: Record<string, string>, key: string, fallback: boolean): boolean {
   const raw = envValue(env, key);
   if (raw === undefined) return fallback;
   return !['0', 'false', 'no', 'off'].includes(raw.trim().toLowerCase());
 }
 
+/** Load and validate Twilio SMS runtime configuration, or return null when SMS is not configured. */
 export function readSmsConfig(): SmsConfig | null {
   const env = readEnvFile([
     'TWILIO_ACCOUNT_SID',
@@ -142,6 +145,7 @@ export function readSmsConfig(): SmsConfig | null {
   };
 }
 
+/** Validate Twilio credential, sender, and local/dev sender policy before adapter startup. */
 function validateSmsConfigEnv(config: {
   accountSid: string;
   authToken: string;
@@ -176,6 +180,7 @@ function validateSmsConfigEnv(config: {
   }
 }
 
+/** Ensure an optional webhook setting is an absolute HTTP(S) URL. */
 function validateHttpUrl(value: string | undefined, label: string): void {
   if (!value) return;
   try {
@@ -186,6 +191,7 @@ function validateHttpUrl(value: string | undefined, label: string): void {
   }
 }
 
+/** Convert a Twilio inbound form body into NanoClaw's normalized SMS payload. */
 export function parseTwilioInbound(params: URLSearchParams): TwilioInbound {
   const numMediaRaw = Number.parseInt(params.get('NumMedia') || '0', 10);
   const numMedia = Number.isFinite(numMediaRaw) && numMediaRaw > 0 ? numMediaRaw : 0;
@@ -213,6 +219,7 @@ export function parseTwilioInbound(params: URLSearchParams): TwilioInbound {
   return inbound;
 }
 
+/** Convert a Twilio delivery-status form body into the fields NanoClaw records. */
 export function parseTwilioStatusCallback(params: URLSearchParams): TwilioStatusCallback {
   return {
     sid: params.get('MessageSid') || params.get('SmsSid') || '',
@@ -224,6 +231,7 @@ export function parseTwilioStatusCallback(params: URLSearchParams): TwilioStatus
   };
 }
 
+/** Wrap a parsed Twilio SMS as the generic inbound chat message used by NanoClaw routing. */
 export function twilioInboundToMessage(inbound: TwilioInbound): InboundMessage {
   return {
     id: inbound.messageSid,
@@ -246,6 +254,7 @@ export function twilioInboundToMessage(inbound: TwilioInbound): InboundMessage {
   };
 }
 
+/** Extract the best plain-text SMS body from a generic NanoClaw outbound message. */
 export function extractSmsText(message: OutboundMessage): string | null {
   const content = message.content;
   if (typeof content === 'string') return stripSmsMarkdown(content);
@@ -262,6 +271,7 @@ export function extractSmsText(message: OutboundMessage): string | null {
   return stripSmsMarkdown(markdown || text || '');
 }
 
+/** Render an ask-question payload into SMS-friendly numbered text. */
 function renderAskQuestion(payload: Record<string, unknown>): string | null {
   const title = typeof payload.title === 'string' ? payload.title : '';
   const question = typeof payload.question === 'string' ? payload.question : '';
@@ -279,6 +289,7 @@ function renderAskQuestion(payload: Record<string, unknown>): string | null {
   return parts.join('\n\n').trim() || null;
 }
 
+/** Render a structured card payload into the plain-text fallback SMS can deliver. */
 function renderCard(payload: Record<string, unknown>): string | null {
   const fallbackText = typeof payload.fallbackText === 'string' ? payload.fallbackText : '';
   if (fallbackText.trim()) return fallbackText.trim();
@@ -300,6 +311,7 @@ function renderCard(payload: Record<string, unknown>): string | null {
   return [title, description, ...children].filter(Boolean).join('\n\n').trim() || null;
 }
 
+/** Remove basic Markdown syntax so outbound SMS text is readable in carrier clients. */
 export function stripSmsMarkdown(text: string): string | null {
   const stripped = text
     .replace(/\r\n/g, '\n')
@@ -314,6 +326,7 @@ export function stripSmsMarkdown(text: string): string | null {
   return stripped || null;
 }
 
+/** Verify Twilio's request signature against the public webhook URL and form parameters. */
 export function validateTwilioSignature(
   authToken: string,
   publicUrl: string,
@@ -338,6 +351,7 @@ export function validateTwilioSignature(
   return crypto.timingSafeEqual(actualBuffer, expectedBuffer);
 }
 
+/** Check Account SID/Auth Token against Twilio before the SMS adapter is marked connected. */
 export async function validateTwilioCredentials(config: SmsConfig): Promise<void> {
   const fetchImpl = config.fetchImpl ?? fetch;
   const auth = twilioBasicAuth(config);
@@ -357,6 +371,7 @@ export async function validateTwilioCredentials(config: SmsConfig): Promise<void
   }
 }
 
+/** Send one SMS through Twilio's Messages API and return the provider message SID. */
 export async function sendTwilioSms(config: SmsConfig, to: string, body: string): Promise<string | undefined> {
   const fetchImpl = config.fetchImpl ?? fetch;
   if (!E164_PHONE_RE.test(to)) {
@@ -392,6 +407,7 @@ export async function sendTwilioSms(config: SmsConfig, to: string, body: string)
   return json.sid;
 }
 
+/** Build the shared webhook handler for inbound SMS and Twilio delivery callbacks. */
 export function createSmsWebhookHandler(config: SmsConfig, hostConfig: ChannelSetup): WebhookHandler {
   return async (request) => {
     const url = new URL(request.url);
@@ -428,6 +444,7 @@ export function createSmsWebhookHandler(config: SmsConfig, hostConfig: ChannelSe
 
 type SmsControlAction = 'stop' | 'start' | 'help';
 
+/** Interpret a standalone user SMS keyword as a local opt-out/help action. */
 export function parseSmsControlAction(body: string): SmsControlAction | null {
   const keyword = normalizeSmsControlKeyword(body);
   if (!keyword) return null;
@@ -437,6 +454,7 @@ export function parseSmsControlAction(body: string): SmsControlAction | null {
   return null;
 }
 
+/** Interpret Twilio Advanced Opt-Out's OptOutType value as a local control action. */
 export function parseSmsOptOutType(optOutType: string | null | undefined): SmsControlAction | null {
   const normalized = String(optOutType || '')
     .trim()
@@ -447,6 +465,7 @@ export function parseSmsOptOutType(optOutType: string | null | undefined): SmsCo
   return null;
 }
 
+/** Normalize a candidate STOP/START/HELP keyword and reject multi-word messages. */
 function normalizeSmsControlKeyword(body: string): string | null {
   const keyword = body
     .trim()
@@ -456,6 +475,7 @@ function normalizeSmsControlKeyword(body: string): string | null {
   return keyword;
 }
 
+/** Apply local SMS control state and decide whether NanoClaw should return TwiML. */
 function handleSmsControlMessage(
   phone: string,
   body: string,
@@ -502,6 +522,7 @@ interface SmsOptOutStore {
   controlEvents: Record<string, { action: SmsControlAction; keyword: string; receivedAt: string }>;
 }
 
+/** Report whether outbound SMS should be suppressed for this phone number. */
 export function isSmsOptedOut(phone: string, config: SmsConfig): boolean {
   try {
     return !!readSmsOptOutStore(config).optedOut[normalizePhoneKey(phone)];
@@ -517,6 +538,7 @@ export function isSmsOptedOut(phone: string, config: SmsConfig): boolean {
   }
 }
 
+/** Set or clear local SMS suppression for a phone number. */
 export function setSmsOptOut(phone: string, optedOut: boolean, config: SmsConfig): void {
   const key = normalizePhoneKey(phone);
   if (!key) return;
@@ -529,6 +551,7 @@ export function setSmsOptOut(phone: string, optedOut: boolean, config: SmsConfig
   writeSmsOptOutStore(config, store);
 }
 
+/** Return the last local control event recorded for a phone number. */
 export function getSmsControlEvent(
   phone: string,
   config: SmsConfig,
@@ -536,6 +559,7 @@ export function getSmsControlEvent(
   return readSmsOptOutStore(config).controlEvents[normalizePhoneKey(phone)];
 }
 
+/** Persist one STOP/START/HELP control event and update suppression when needed. */
 function recordSmsControlEvent(phone: string, action: SmsControlAction, keyword: string, config: SmsConfig): void {
   const key = normalizePhoneKey(phone);
   if (!key) return;
@@ -553,6 +577,7 @@ function recordSmsControlEvent(phone: string, action: SmsControlAction, keyword:
   writeSmsOptOutStore(config, store);
 }
 
+/** Best-effort wrapper around control event persistence for webhook handling. */
 function tryRecordSmsControlEvent(
   phone: string,
   action: SmsControlAction,
@@ -574,6 +599,7 @@ function tryRecordSmsControlEvent(
   }
 }
 
+/** Read the local SMS opt-out/control event store from disk. */
 function readSmsOptOutStore(config: SmsConfig): SmsOptOutStore {
   const storePath = smsOptOutStorePath(config);
   let raw = '';
@@ -596,6 +622,7 @@ function readSmsOptOutStore(config: SmsConfig): SmsOptOutStore {
   };
 }
 
+/** Atomically write the local SMS opt-out/control event store with owner-only permissions. */
 function writeSmsOptOutStore(config: SmsConfig, store: SmsOptOutStore): void {
   const storePath = smsOptOutStorePath(config);
   fs.mkdirSync(path.dirname(storePath), { recursive: true });
@@ -609,14 +636,17 @@ function writeSmsOptOutStore(config: SmsConfig, store: SmsOptOutStore): void {
   fs.chmodSync(storePath, SMS_OPT_OUT_STORE_MODE);
 }
 
+/** Resolve the opt-out store path, defaulting to NanoClaw's data directory. */
 function smsOptOutStorePath(config: SmsConfig): string {
   return config.optOutStorePath ?? path.join(DATA_DIR, 'sms-opt-outs.json');
 }
 
+/** Normalize the storage key for an E.164 phone number. */
 function normalizePhoneKey(phone: string): string {
   return phone.trim();
 }
 
+/** Redact an SMS phone number for logs while preserving enough shape for debugging. */
 function redactSmsPhone(phone: string | undefined): string | undefined {
   const normalized = String(phone || '').trim();
   if (!normalized) return undefined;
@@ -624,15 +654,18 @@ function redactSmsPhone(phone: string | undefined): string | undefined {
   return `${normalized.slice(0, 3)}...${normalized.slice(-4)}`;
 }
 
+/** Sanitize optional SMS text fields without turning missing values into strings. */
 function sanitizeOptionalSmsText(value: string | undefined): string | undefined {
   if (value === undefined) return undefined;
   return sanitizeSmsText(value);
 }
 
+/** Redact phone numbers from provider/user text before it reaches logs or errors. */
 function sanitizeSmsText(value: string): string {
   return value.replace(/\+[1-9]\d{7,14}/g, '[redacted-phone]').replace(/%2B[1-9]\d{7,14}/gi, '[redacted-phone]');
 }
 
+/** Handle Twilio delivery status callbacks and mirror status into delivered rows. */
 async function handleStatusWebhook(request: Request, config: SmsConfig): Promise<Response> {
   const body = await request.text();
   const params = new URLSearchParams(body);
@@ -661,6 +694,7 @@ async function handleStatusWebhook(request: Request, config: SmsConfig): Promise
   return textResponse('OK', 200);
 }
 
+/** Record a Twilio delivery status in any active session that owns the message SID. */
 export function recordSmsDeliveryStatus(platformMessageId: string, status: string): number {
   let sessions;
   try {
@@ -696,6 +730,7 @@ export function recordSmsDeliveryStatus(platformMessageId: string, status: strin
   return changes;
 }
 
+/** Create the NanoClaw channel adapter that registers webhooks and sends SMS replies. */
 export function createSmsAdapter(config: SmsConfig): ChannelAdapter {
   let connected = false;
 
@@ -704,6 +739,7 @@ export function createSmsAdapter(config: SmsConfig): ChannelAdapter {
     channelType: CHANNEL_TYPE,
     supportsThreads: false,
 
+    /** Validate Twilio credentials and register webhook routes. */
     async setup(hostConfig: ChannelSetup): Promise<void> {
       if (config.validateCredentials !== false) {
         await validateTwilioCredentials(config);
@@ -717,15 +753,18 @@ export function createSmsAdapter(config: SmsConfig): ChannelAdapter {
       });
     },
 
+    /** Remove webhook routes and mark the adapter disconnected. */
     async teardown(): Promise<void> {
       unregisterWebhookHandler(WEBHOOK_NAME);
       connected = false;
     },
 
+    /** Return whether setup completed for this adapter instance. */
     isConnected(): boolean {
       return connected;
     },
 
+    /** Deliver one outbound SMS after converting content and checking local suppression. */
     async deliver(platformId: string, _threadId: string | null, message: OutboundMessage): Promise<string | undefined> {
       const text = extractSmsText(message);
       if (!text) return undefined;
@@ -740,6 +779,7 @@ export function createSmsAdapter(config: SmsConfig): ChannelAdapter {
   };
 }
 
+/** Verify a Twilio webhook request unless signature validation is explicitly disabled. */
 function verifyRequestSignature(
   request: Request,
   config: SmsConfig,
@@ -757,6 +797,7 @@ function verifyRequestSignature(
   );
 }
 
+/** Reconstruct the public request URL from proxy headers for signature validation. */
 function publicRequestUrl(request: Request): string {
   const url = new URL(request.url);
   const proto = request.headers.get('x-forwarded-proto')?.split(',')[0]?.trim() || url.protocol.replace(':', '');
@@ -765,6 +806,7 @@ function publicRequestUrl(request: Request): string {
   return `${proto}://${host}${url.pathname}${url.search}`;
 }
 
+/** Derive the default status callback URL from the inbound webhook URL. */
 function statusCallbackUrlFor(webhookUrl: string | undefined): string | undefined {
   if (!webhookUrl) return undefined;
   const url = new URL(webhookUrl);
@@ -772,34 +814,41 @@ function statusCallbackUrlFor(webhookUrl: string | undefined): string | undefine
   return url.toString();
 }
 
+/** Choose the Twilio Messages API sender parameter for a sender value. */
 function senderParamName(sender: string): 'MessagingServiceSid' | 'From' {
   if (TWILIO_MESSAGING_SERVICE_SID_RE.test(sender)) return 'MessagingServiceSid';
   if (E164_PHONE_RE.test(sender)) return 'From';
   throw new Error('SMS sender must be a valid Twilio Messaging Service SID or E.164 phone number');
 }
 
+/** Validate that a sender is either a Messaging Service SID or E.164 phone number. */
 function isValidSmsSender(sender: string): boolean {
   return TWILIO_MESSAGING_SERVICE_SID_RE.test(sender) || E164_PHONE_RE.test(sender);
 }
 
+/** Build the HTTP Basic auth value expected by Twilio APIs. */
 function twilioBasicAuth(config: SmsConfig): string {
   return Buffer.from(`${config.accountSid}:${config.authToken}`).toString('base64');
 }
 
+/** Normalize provider delivery status strings before storing them locally. */
 function normalizeDeliveryStatus(status: string): string {
   const normalized = status.trim().toLowerCase();
   return normalized || 'unknown';
 }
 
+/** Return a plain-text HTTP response. */
 function textResponse(body: string, status: number): Response {
   return new Response(body, { status, headers: { 'Content-Type': 'text/plain' } });
 }
 
+/** Return a TwiML response, optionally with a single SMS reply message. */
 function twimlResponse(message?: string): Response {
   const body = message ? `<Response><Message>${escapeXml(message)}</Message></Response>` : '<Response></Response>';
   return new Response(body, { status: 200, headers: { 'Content-Type': 'text/xml' } });
 }
 
+/** Escape user/config text before embedding it in XML TwiML. */
 function escapeXml(value: string): string {
   return value
     .replace(/&/g, '&amp;')
@@ -810,6 +859,7 @@ function escapeXml(value: string): string {
 }
 
 registerChannelAdapter(CHANNEL_TYPE, {
+  /** Instantiate the SMS adapter only when Twilio SMS env is complete. */
   factory: () => {
     const config = readSmsConfig();
     if (!config) return null;

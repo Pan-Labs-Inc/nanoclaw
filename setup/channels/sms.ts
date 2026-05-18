@@ -39,6 +39,7 @@ interface TwilioAccountInfo {
   status?: string;
 }
 
+/** Run the interactive setup flow that installs SMS and sends the first welcome message. */
 export async function runSmsChannel(displayName: string): Promise<ChannelFlowResult> {
   const intro = await walkThroughTwilioSetup();
   if (intro === 'back') return BACK_TO_CHANNEL_SELECTION;
@@ -173,6 +174,7 @@ export interface MessagingServiceWebhookConfig {
   fetchImpl?: typeof fetch;
 }
 
+/** Configure inbound and status webhook URLs on a Twilio Messaging Service. */
 export async function configureMessagingServiceWebhooks({
   accountSid,
   authToken,
@@ -212,6 +214,7 @@ export async function configureMessagingServiceWebhooks({
   }
 }
 
+/** Wrap Messaging Service webhook configuration with setup UI, timing, and logs. */
 async function configureMessagingServiceForSetup(config: MessagingServiceWebhookConfig): Promise<void> {
   const start = Date.now();
   const s = p.spinner();
@@ -239,6 +242,7 @@ async function configureMessagingServiceForSetup(config: MessagingServiceWebhook
   }
 }
 
+/** Explain Twilio requirements and let the operator continue, open Console, or back out. */
 async function walkThroughTwilioSetup(): Promise<'continue' | 'back'> {
   const linkBlock = isHeadless() ? [`Twilio senders: ${TWILIO_CONSOLE_URL}`, ''] : [];
 
@@ -276,6 +280,7 @@ async function walkThroughTwilioSetup(): Promise<'continue' | 'back'> {
   return 'continue';
 }
 
+/** Collect and validate the Twilio Account SID, reusing a valid existing env value when confirmed. */
 async function collectAccountSid(): Promise<string> {
   const existing = envValue('TWILIO_ACCOUNT_SID');
   if (existing && isAccountSid(existing)) {
@@ -308,6 +313,7 @@ async function collectAccountSid(): Promise<string> {
   return sid;
 }
 
+/** Collect the Twilio Auth Token, reusing an existing env value when confirmed. */
 async function collectAuthToken(): Promise<string> {
   const existing = envValue('TWILIO_AUTH_TOKEN');
   if (existing && existing.length >= 16) {
@@ -340,6 +346,7 @@ async function collectAuthToken(): Promise<string> {
   return token;
 }
 
+/** Validate Twilio credentials with the Accounts API and return a displayable account label. */
 async function validateTwilioCredentials(accountSid: string, authToken: string): Promise<TwilioAccountInfo> {
   const start = Date.now();
   const s = p.spinner();
@@ -384,6 +391,7 @@ async function validateTwilioCredentials(accountSid: string, authToken: string):
   }
 }
 
+/** Collect the Twilio sender, preferring Messaging Service SIDs over bare phone numbers. */
 async function collectSender(): Promise<Sender> {
   const existingMessagingService = envValue('TWILIO_MESSAGING_SERVICE_SID');
   const existingPhone = envValue('TWILIO_PHONE_NUMBER') ?? envValue('TWILIO_FROM_NUMBER');
@@ -440,6 +448,7 @@ async function collectSender(): Promise<Sender> {
   return { kind, value };
 }
 
+/** Collect the public inbound SMS webhook URL and normalize missing paths. */
 async function collectWebhookUrl(): Promise<string> {
   const existing = envValue('TWILIO_SMS_WEBHOOK_URL');
   if (existing && normalizeWebhookUrl(existing)) {
@@ -476,6 +485,7 @@ async function collectWebhookUrl(): Promise<string> {
   return url;
 }
 
+/** Collect the operator's opted-in phone number for the initial SMS registration. */
 async function collectOperatorPhone(): Promise<string> {
   const answer = ensureAnswer(
     await p.text({
@@ -494,6 +504,7 @@ async function collectOperatorPhone(): Promise<string> {
   return phone;
 }
 
+/** Resolve the assistant display name from env or the setup prompt. */
 async function resolveAgentName(): Promise<string> {
   const preset = process.env.NANOCLAW_AGENT_NAME?.trim();
   if (preset) {
@@ -512,6 +523,7 @@ async function resolveAgentName(): Promise<string> {
   return value;
 }
 
+/** Show the Twilio Console checklist for the URLs NanoClaw will validate at runtime. */
 function showTwilioWebhookChecklist(webhookUrl: string, statusCallbackUrl: string): void {
   note(
     [
@@ -531,30 +543,37 @@ function showTwilioWebhookChecklist(webhookUrl: string, statusCallbackUrl: strin
   );
 }
 
+/** Read a trimmed setup value from process env or the persisted setup env. */
 function envValue(key: string): string | null {
   return process.env[key]?.trim() || readEnvKey(key);
 }
 
+/** Return true when a value looks like a Twilio Account SID. */
 function isAccountSid(value: string): boolean {
   return /^AC[a-fA-F0-9]{32}$/.test(value);
 }
 
+/** Return true when a value looks like a Twilio Messaging Service SID. */
 function isMessagingServiceSid(value: string): boolean {
   return /^MG[a-fA-F0-9]{32}$/.test(value);
 }
 
+/** Return true when a value is a practical E.164 phone number for SMS setup. */
 function isE164(value: string): boolean {
   return /^\+[1-9]\d{7,14}$/.test(value);
 }
 
+/** Mask a Twilio SID for setup prompts and logs. */
 function maskSid(value: string): string {
   return `${value.slice(0, 6)}...${value.slice(-4)}`;
 }
 
+/** Mask a secret while preserving enough shape to identify accidental reuse. */
 function maskSecret(value: string): string {
   return `${value.slice(0, 4)}...${value.slice(-4)}`;
 }
 
+/** Mask either an E.164 phone sender or Twilio SID for setup logs. */
 function maskSender(value: string): string {
   if (value.startsWith('+') && value.length > 6) {
     return `${value.slice(0, 3)}...${value.slice(-4)}`;
@@ -563,6 +582,7 @@ function maskSender(value: string): string {
   return value;
 }
 
+/** Normalize a webhook URL and default bare host URLs to /webhook/sms. */
 function normalizeWebhookUrl(raw: string): string | null {
   const value = raw.trim();
   if (!value) return null;
@@ -576,16 +596,19 @@ function normalizeWebhookUrl(raw: string): string | null {
   }
 }
 
+/** Derive NanoClaw's SMS status callback URL from the inbound webhook URL. */
 function statusCallbackUrlFor(webhookUrl: string): string {
   const url = new URL(webhookUrl);
   url.pathname = url.pathname.endsWith('/') ? `${url.pathname}status` : `${url.pathname}/status`;
   return url.toString();
 }
 
+/** Redact phone numbers from Twilio response text before surfacing setup errors. */
 function sanitizeTwilioText(value: string): string {
   return value.replace(/\+[1-9]\d{7,14}/g, '[redacted-phone]').replace(/%2B[1-9]\d{7,14}/gi, '[redacted-phone]');
 }
 
+/** Parse JSON response text without letting malformed provider responses crash setup. */
 function safeJson(text: string): unknown {
   try {
     return JSON.parse(text);
