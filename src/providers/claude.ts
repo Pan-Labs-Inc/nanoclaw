@@ -31,6 +31,7 @@ const LANGFUSE_KEYS = [
   'LANGFUSE_SECRET_KEY',
   'LANGFUSE_HOST',
   'LANGFUSE_LOG_PROMPTS',
+  'LANGFUSE_ENVIRONMENT',
 ];
 
 registerProviderContainerConfig('claude', (ctx) => {
