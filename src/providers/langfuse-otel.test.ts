@@ -1,11 +1,12 @@
 /**
  * Unit tests for buildLangfuseOtelEnv.
  *
- * Pins the contract that the Langfuse-over-OTEL wiring depends on: the exporter
- * stays off unless fully configured (so a half-set .env never spams failed OTLP
- * posts), the OTLP endpoint resolves to Langfuse's ingest path, the auth header
- * is Basic base64(pk:sk), metrics are deliberately omitted, and prompt-content
- * logging is off unless explicitly opted in (teen-data privacy default).
+ * Pins the contract the Langfuse wiring depends on: the exporter stays off
+ * unless fully configured; it exports TRACES (spans) via Claude Code's
+ * enhanced-telemetry beta — NOT logs (Langfuse has no /v1/logs route, the
+ * regression that shipped no data) and NOT metrics; the OTLP endpoint and Basic
+ * auth resolve correctly; the environment resource attribute is set/validated;
+ * and prompt content stays off unless explicitly opted in (teen-privacy default).
  */
 import { describe, it, expect } from 'vitest';
 
@@ -40,14 +41,37 @@ describe('buildLangfuseOtelEnv — gating', () => {
   });
 });
 
-describe('buildLangfuseOtelEnv — OTLP wiring', () => {
-  it('points the OTLP exporter at Langfuse and authenticates with Basic base64(pk:sk)', () => {
+describe('buildLangfuseOtelEnv — TRACE exporter (not logs/metrics)', () => {
+  it('enables the enhanced-telemetry beta and the OTLP TRACE exporter', () => {
+    const env = buildLangfuseOtelEnv(KEYS);
+    expect(env.CLAUDE_CODE_ENABLE_TELEMETRY).toBe('1');
+    expect(env.CLAUDE_CODE_ENHANCED_TELEMETRY_BETA).toBe('1');
+    expect(env.OTEL_TRACES_EXPORTER).toBe('otlp');
+  });
+
+  // Regression guard: a logs exporter POSTs to /v1/logs, which Langfuse 404s —
+  // the exact defect that shipped a fully dark integration. Logs MUST be off.
+  it('does NOT export logs — Langfuse has no /v1/logs route', () => {
+    const env = buildLangfuseOtelEnv(KEYS);
+    expect(env.OTEL_LOGS_EXPORTER).toBe('none');
+    expect(env.OTEL_LOGS_EXPORTER).not.toBe('otlp');
+  });
+
+  it('does NOT export metrics — that is the cost/throughput signal (PostHog)', () => {
+    const env = buildLangfuseOtelEnv(KEYS);
+    expect(env.OTEL_METRICS_EXPORTER).toBe('none');
+  });
+
+  it('forces HTTP/protobuf — Langfuse rejects gRPC (the OTEL trace default)', () => {
+    expect(buildLangfuseOtelEnv(KEYS).OTEL_EXPORTER_OTLP_PROTOCOL).toBe('http/protobuf');
+  });
+});
+
+describe('buildLangfuseOtelEnv — OTLP endpoint + auth', () => {
+  it('points the exporter base at Langfuse and authenticates with Basic base64(pk:sk)', () => {
     const env = buildLangfuseOtelEnv(KEYS);
     const expectedAuth = Buffer.from('pk-lf-public:sk-lf-secret').toString('base64');
-
-    expect(env.CLAUDE_CODE_ENABLE_TELEMETRY).toBe('1');
-    expect(env.OTEL_LOGS_EXPORTER).toBe('otlp');
-    expect(env.OTEL_EXPORTER_OTLP_PROTOCOL).toBe('http/protobuf');
+    // Base endpoint; the SDK appends /v1/traces for the trace signal.
     expect(env.OTEL_EXPORTER_OTLP_ENDPOINT).toBe('https://us.cloud.langfuse.com/api/public/otel');
     expect(env.OTEL_EXPORTER_OTLP_HEADERS).toBe(`Authorization=Basic ${expectedAuth}`);
   });
@@ -61,10 +85,27 @@ describe('buildLangfuseOtelEnv — OTLP wiring', () => {
     const env = buildLangfuseOtelEnv({ ...KEYS, LANGFUSE_HOST: 'https://us.cloud.langfuse.com/' });
     expect(env.OTEL_EXPORTER_OTLP_ENDPOINT).toBe('https://us.cloud.langfuse.com/api/public/otel');
   });
+});
 
-  it('does NOT export metrics — events only, not cost/throughput telemetry', () => {
-    const env = buildLangfuseOtelEnv(KEYS);
-    expect(env.OTEL_METRICS_EXPORTER).toBeUndefined();
+describe('buildLangfuseOtelEnv — environment resource attribute', () => {
+  it('omits OTEL_RESOURCE_ATTRIBUTES when LANGFUSE_ENVIRONMENT is unset', () => {
+    expect(buildLangfuseOtelEnv(KEYS).OTEL_RESOURCE_ATTRIBUTES).toBeUndefined();
+  });
+
+  it('sets langfuse.environment from LANGFUSE_ENVIRONMENT', () => {
+    const env = buildLangfuseOtelEnv({ ...KEYS, LANGFUSE_ENVIRONMENT: 'production' });
+    expect(env.OTEL_RESOURCE_ATTRIBUTES).toBe('langfuse.environment=production');
+  });
+
+  it('lowercases the environment value', () => {
+    const env = buildLangfuseOtelEnv({ ...KEYS, LANGFUSE_ENVIRONMENT: 'UAT' });
+    expect(env.OTEL_RESOURCE_ATTRIBUTES).toBe('langfuse.environment=uat');
+  });
+
+  it('drops an environment that violates Langfuse naming (spaces, reserved prefix, too long)', () => {
+    expect(buildLangfuseOtelEnv({ ...KEYS, LANGFUSE_ENVIRONMENT: 'prod env' }).OTEL_RESOURCE_ATTRIBUTES).toBeUndefined();
+    expect(buildLangfuseOtelEnv({ ...KEYS, LANGFUSE_ENVIRONMENT: 'langfuse-x' }).OTEL_RESOURCE_ATTRIBUTES).toBeUndefined();
+    expect(buildLangfuseOtelEnv({ ...KEYS, LANGFUSE_ENVIRONMENT: 'x'.repeat(41) }).OTEL_RESOURCE_ATTRIBUTES).toBeUndefined();
   });
 });
 
