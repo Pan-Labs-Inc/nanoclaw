@@ -11,18 +11,20 @@
  *    ANTHROPIC_AUTH_TOKEN (so the SDK adds an Authorization header for OneCLI to
  *    overwrite). Standard installs hitting api.anthropic.com leave both unset.
  *
- * 2. Langfuse observability. When LANGFUSE_ENABLED is set, derive the OTEL env
- *    that points Claude Code's native telemetry at Langfuse Cloud (see
- *    ./langfuse-otel.ts). Container egress runs through the OneCLI gateway, so
- *    the Langfuse host must be reachable through that proxy with its
- *    Authorization header left intact.
+ * 2. Langfuse observability. When LANGFUSE_ENABLED is set, forward the Langfuse
+ *    credentials into the container (see ./langfuse-env.ts). Tracing itself is an
+ *    in-process Stop hook in the agent-runner that reads the transcript and pushes
+ *    via the Langfuse JS SDK — NOT Claude Code's native OTEL (which exports
+ *    logs/metrics that Langfuse's spans-only OTLP endpoint drops). Container
+ *    egress runs through the OneCLI gateway, so the Langfuse host must be
+ *    reachable through that proxy with its Authorization header left intact.
  *
  * This module is imported unconditionally from providers/index.ts so the
  * observability path is available on every install; the endpoint path stays
  * dormant until ANTHROPIC_BASE_URL is configured.
  */
 import { readEnvFile } from '../env.js';
-import { buildLangfuseOtelEnv } from './langfuse-otel.js';
+import { buildLangfuseContainerEnv } from './langfuse-env.js';
 import { registerProviderContainerConfig } from './provider-container-registry.js';
 
 const LANGFUSE_KEYS = [
@@ -45,7 +47,7 @@ registerProviderContainerConfig('claude', (ctx) => {
 
   // .env is the configured source (host writes LANGFUSE_* there); fall back to
   // the spawn-time process env so an operator can override ad hoc.
-  Object.assign(env, buildLangfuseOtelEnv({ ...ctx.hostEnv, ...dotenv }));
+  Object.assign(env, buildLangfuseContainerEnv({ ...ctx.hostEnv, ...dotenv }));
 
   return { env };
 });

@@ -1,10 +1,19 @@
 import fs from 'fs';
 import path from 'path';
 
-import { query as sdkQuery, type HookCallback, type PreCompactHookInput } from '@anthropic-ai/claude-agent-sdk';
+import { query as sdkQuery, type HookCallback, type PreCompactHookInput, type StopHookInput } from '@anthropic-ai/claude-agent-sdk';
+import { Langfuse } from 'langfuse';
 
 import { clearContainerToolInFlight, setContainerToolInFlight } from '../db/connection.js';
 import { registerProvider } from './provider-registry.js';
+import {
+  buildTracePayloads,
+  emitTracePayloads,
+  parseTranscriptTurns,
+  resolveLangfuseConfig,
+  type LangfuseConfig,
+  type LangfuseLike,
+} from './langfuse-trace.js';
 import type { AgentProvider, AgentQuery, McpServerConfig, ProviderEvent, ProviderOptions, QueryInput } from './types.js';
 
 function log(msg: string): void {
@@ -231,6 +240,94 @@ function createPreCompactHook(assistantName?: string): HookCallback {
   };
 }
 
+// ── Langfuse Stop hook ──
+
+/**
+ * One Langfuse client per process, built lazily on the first traced turn. The
+ * SDK batches and flushes in the background, so reusing it across turns keeps
+ * the export off the request path.
+ */
+let langfuseClient: Langfuse | null = null;
+function getLangfuseClient(cfg: LangfuseConfig): Langfuse {
+  if (!langfuseClient) {
+    langfuseClient = new Langfuse({
+      publicKey: cfg.publicKey,
+      secretKey: cfg.secretKey,
+      baseUrl: cfg.baseUrl,
+      environment: cfg.environment,
+    });
+  }
+  return langfuseClient;
+}
+
+/** Byte offset of the transcript already exported, persisted beside it so we
+ *  resume across container restarts and never double-send a turn. */
+function readOffset(transcriptPath: string): number {
+  try {
+    const n = parseInt(fs.readFileSync(`${transcriptPath}.lfoffset`, 'utf-8').trim(), 10);
+    return Number.isFinite(n) && n >= 0 ? n : 0;
+  } catch {
+    return 0;
+  }
+}
+function writeOffset(transcriptPath: string, offset: number): void {
+  try {
+    fs.writeFileSync(`${transcriptPath}.lfoffset`, String(offset));
+  } catch (err) {
+    log(`Langfuse: failed to persist offset: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+/**
+ * Stop hook: after each turn, read the new transcript lines, build Langfuse
+ * traces, and push them. Runs in the agent-runner process *after* the response
+ * completes, so a slow or failing export can never hang a teen's turn. No-op —
+ * and zero client construction — unless Langfuse is fully configured.
+ */
+function createStopHook(env: Record<string, string | undefined>, assistantName?: string): HookCallback {
+  return async (input) => {
+    const cfg = resolveLangfuseConfig(env);
+    if (!cfg) return {};
+
+    const { transcript_path: transcriptPath, session_id: sessionId, cwd } = input as StopHookInput;
+    if (!transcriptPath || !sessionId) return {};
+
+    try {
+      if (!fs.existsSync(transcriptPath)) return {};
+      const content = fs.readFileSync(transcriptPath, 'utf-8');
+      const { turns, newOffset } = parseTranscriptTurns(content, readOffset(transcriptPath));
+      if (turns.length === 0) {
+        writeOffset(transcriptPath, newOffset);
+        return {};
+      }
+
+      // The agent identity (e.g. a per-family group name) can be identifying, so
+      // it is gated behind the same opt-in as content. Default-off tracing groups
+      // turns by sessionId alone — enough for per-session debugging without
+      // exporting a per-tenant identifier to Langfuse.
+      const userId = cfg.logPrompts ? assistantName || (cwd ? path.basename(cwd) : undefined) : undefined;
+      const payloads = buildTracePayloads(turns, {
+        sessionId,
+        userId,
+        environment: cfg.environment,
+        logPrompts: cfg.logPrompts,
+      });
+
+      const client = getLangfuseClient(cfg);
+      const emitted = emitTracePayloads(client as unknown as LangfuseLike, payloads);
+      // Don't await the flush — the SDK drains in the background; the persisted
+      // offset guards against re-sending if a flush is lost on shutdown.
+      void client.flushAsync();
+      writeOffset(transcriptPath, newOffset);
+      log(`Langfuse: traced ${emitted} turn(s) for session ${sessionId}`);
+    } catch (err) {
+      // Loud but non-fatal: a tracing failure must never break the turn.
+      log(`Langfuse: Stop hook failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    return {};
+  };
+}
+
 // ── Provider ──
 
 /**
@@ -309,6 +406,7 @@ export class ClaudeProvider implements AgentProvider {
           PostToolUse: [{ hooks: [postToolUseHook] }],
           PostToolUseFailure: [{ hooks: [postToolUseHook] }],
           PreCompact: [{ hooks: [createPreCompactHook(this.assistantName)] }],
+          Stop: [{ hooks: [createStopHook(this.env, this.assistantName)] }],
         },
       },
     });
