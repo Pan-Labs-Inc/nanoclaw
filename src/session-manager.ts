@@ -391,7 +391,12 @@ export function writeOutboundDirect(
     content: string;
   },
 ): void {
-  const db = openOutboundDb(agentGroupId, sessionId);
+  // Must open RW: this is a host-side WRITE into outbound.db (the container's
+  // DB). openOutboundDb opens { readonly: true } for the host's normal
+  // read-and-ship path, so using it here threw "attempt to write a readonly
+  // database" at INSERT time. The open-write-close + INSERT OR IGNORE here is
+  // the sanctioned host→outbound write (command-gate denials, `messages send`).
+  const db = openOutboundDbRw(agentGroupId, sessionId);
   try {
     db.prepare(
       `INSERT OR IGNORE INTO messages_out (id, seq, timestamp, kind, platform_id, channel_type, thread_id, content)
