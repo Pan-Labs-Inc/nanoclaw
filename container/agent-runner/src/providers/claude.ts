@@ -399,7 +399,11 @@ export class ClaudeProvider implements AgentProvider {
         effort: this.effort as any,
         permissionMode: 'bypassPermissions',
         allowDangerouslySkipPermissions: true,
-        settingSources: ['project', 'user'],
+        // 'local' loads per-group CLAUDE.local.md (the persona Pan compiles per
+        // family). 'project' alone loads only CLAUDE.md, whose composed form
+        // imports the shared base + fragments but NOT CLAUDE.local.md — so
+        // without 'local' the per-group prompt is silently never read.
+        settingSources: ['project', 'user', 'local'],
         mcpServers: this.mcpServers,
         hooks: {
           PreToolUse: [{ hooks: [preToolUseHook] }],
