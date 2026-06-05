@@ -11,6 +11,20 @@ import { log } from './log.js';
 /** The container runtime binary name. */
 export const CONTAINER_RUNTIME_BIN = 'docker';
 
+/**
+ * Grace period (seconds) for `docker stop` before SIGKILL. This window must be
+ * long enough for the agent's Stop hook to run to completion — for Pan that hook
+ * commits the current turn to a git-backed turn-store, which (cold fs, git
+ * add/commit, fsync) routinely takes several seconds. At the old value of 1s the
+ * Stop hook was SIGKILLed mid-commit, so single-exchange sessions (one inbound,
+ * one reply, no follow-up) lost their turn entirely: UserPromptSubmit opens the
+ * turn but nothing closes it (no next message → no close-on-next; SIGKILL → no
+ * Stop). The lost turn also silently desyncs any state derived from the
+ * turn-store. 30s gives the hook room while staying well under the host sweep's
+ * kill cadence.
+ */
+export const STOP_GRACE_SECONDS = 30;
+
 /** CLI args needed for the container to resolve the host gateway. */
 export function hostGatewayArgs(): string[] {
   // On Linux, host.docker.internal isn't built-in — add it explicitly
@@ -30,7 +44,7 @@ export function stopContainer(name: string): void {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(name)) {
     throw new Error(`Invalid container name: ${name}`);
   }
-  execSync(`${CONTAINER_RUNTIME_BIN} stop -t 1 ${name}`, { stdio: 'pipe' });
+  execSync(`${CONTAINER_RUNTIME_BIN} stop -t ${STOP_GRACE_SECONDS} ${name}`, { stdio: 'pipe' });
 }
 
 /** Ensure the container runtime is running, starting it if needed. */

@@ -19,6 +19,7 @@ vi.mock('child_process', () => ({
 
 import {
   CONTAINER_RUNTIME_BIN,
+  STOP_GRACE_SECONDS,
   readonlyMountArgs,
   stopContainer,
   ensureContainerRuntimeRunning,
@@ -41,11 +42,24 @@ describe('readonlyMountArgs', () => {
 });
 
 describe('stopContainer', () => {
-  it('calls docker stop for valid container names', () => {
+  it('calls docker stop with the configured grace period for valid names', () => {
     stopContainer('nanoclaw-test-123');
-    expect(mockExecSync).toHaveBeenCalledWith(`${CONTAINER_RUNTIME_BIN} stop -t 1 nanoclaw-test-123`, {
-      stdio: 'pipe',
-    });
+    expect(mockExecSync).toHaveBeenCalledWith(
+      `${CONTAINER_RUNTIME_BIN} stop -t ${STOP_GRACE_SECONDS} nanoclaw-test-123`,
+      { stdio: 'pipe' },
+    );
+  });
+
+  // Regression guard for the single-exchange turn-loss bug: the grace period
+  // must leave the agent's Stop hook (git turn-store commit) enough time to
+  // finish before SIGKILL. 1s did not — it was SIGKILLed mid-commit. Pin a
+  // floor so it can never silently regress to a sub-commit window.
+  it('uses a stop grace period long enough for the Stop hook to commit (>= 15s)', () => {
+    expect(STOP_GRACE_SECONDS).toBeGreaterThanOrEqual(15);
+    stopContainer('nanoclaw-test-123');
+    const cmd = mockExecSync.mock.calls[0][0] as string;
+    const grace = Number(cmd.match(/ stop -t (\d+) /)?.[1]);
+    expect(grace).toBeGreaterThanOrEqual(15);
   });
 
   it('rejects names with shell metacharacters', () => {
@@ -106,10 +120,10 @@ describe('cleanupOrphans', () => {
 
     // ps + 2 stop calls
     expect(mockExecSync).toHaveBeenCalledTimes(3);
-    expect(mockExecSync).toHaveBeenNthCalledWith(2, `${CONTAINER_RUNTIME_BIN} stop -t 1 nanoclaw-group1-111`, {
+    expect(mockExecSync).toHaveBeenNthCalledWith(2, `${CONTAINER_RUNTIME_BIN} stop -t ${STOP_GRACE_SECONDS} nanoclaw-group1-111`, {
       stdio: 'pipe',
     });
-    expect(mockExecSync).toHaveBeenNthCalledWith(3, `${CONTAINER_RUNTIME_BIN} stop -t 1 nanoclaw-group2-222`, {
+    expect(mockExecSync).toHaveBeenNthCalledWith(3, `${CONTAINER_RUNTIME_BIN} stop -t ${STOP_GRACE_SECONDS} nanoclaw-group2-222`, {
       stdio: 'pipe',
     });
     expect(log.info).toHaveBeenCalledWith('Stopped orphaned containers', {
