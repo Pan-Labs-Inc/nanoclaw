@@ -30,7 +30,8 @@ import {
   getMessagingGroupsByAgentGroup,
   getMessagingGroupAgentByPair,
 } from '../../db/messaging-groups.js';
-import { resolveSession, writeOutboundDirect } from '../../session-manager.js';
+import { resolveSession, writeOutboundDirect, writeSessionMessage } from '../../session-manager.js';
+import { log } from '../../log.js';
 import { register } from '../registry.js';
 
 interface SendArgs {
@@ -38,6 +39,14 @@ interface SendArgs {
   text: string;
   channelType?: string;
   platformId?: string;
+  /**
+   * When true, also record the sent text into the OWNING agent's inbound.db as
+   * a `kind: 'delivered'`, `trigger: 0` row — so the agent that owns this
+   * channel sees, on its next turn, that this message was already delivered on
+   * its behalf (and does not repeat it). Without this flag the send is
+   * delivery-only and invisible to the agent's own conversation history.
+   */
+  record?: boolean;
 }
 
 function parseSendArgs(raw: Record<string, unknown>): SendArgs {
@@ -46,6 +55,10 @@ function parseSendArgs(raw: Record<string, unknown>): SendArgs {
   const text = (raw.text ?? raw.message) as unknown;
   const channelType = (raw['channel-type'] ?? raw.channel_type ?? raw.channelType) as unknown;
   const platformId = (raw['platform-id'] ?? raw.platform_id ?? raw.platformId) as unknown;
+  // Bare `--record` parses to boolean true (client.ts); also accept the
+  // string forms a non-CLI caller might pass.
+  const rawRecord = raw.record ?? raw['record-inbound'] ?? raw.seedHistory;
+  const record = rawRecord === true || rawRecord === 'true' || rawRecord === '' || rawRecord === '1';
 
   if (typeof folder !== 'string' || folder.trim() === '') {
     throw new Error('--folder is required (the group folder, e.g. pan-parent-abc123)');
@@ -58,18 +71,19 @@ function parseSendArgs(raw: Record<string, unknown>): SendArgs {
     text,
     channelType: typeof channelType === 'string' ? channelType : undefined,
     platformId: typeof platformId === 'string' ? platformId : undefined,
+    record,
   };
 }
 
 register({
   name: 'messages-send',
   description:
-    'Send a verbatim, host-authored message to a group folder’s channel. Resolves folder → agent group → wired messaging group and delivers the text as-is (NOT through the agent). Args: --folder <group-folder> --text <message> [--channel-type <type> --platform-id <id> to disambiguate when a folder is wired to multiple channels].',
+    'Send a verbatim, host-authored message to a group folder’s channel. Resolves folder → agent group → wired messaging group and delivers the text as-is (NOT through the agent). Args: --folder <group-folder> --text <message> [--channel-type <type> --platform-id <id> to disambiguate when a folder is wired to multiple channels] [--record to also seed the text into the owning agent’s inbound history as a kind:delivered, trigger:0 row so the agent knows it was sent on its behalf].',
   access: 'open',
   resource: 'messages',
   parseArgs: parseSendArgs,
   handler: async (args: SendArgs) => {
-    const { folder, text, channelType, platformId } = args;
+    const { folder, text, channelType, platformId, record } = args;
 
     const agentGroup = getAgentGroupByFolder(folder);
     if (!agentGroup) {
@@ -119,17 +133,63 @@ register({
     const { session } = resolveSession(agentGroup.id, target.id, null, sessionMode);
 
     const messageId = `host-send-${Date.now()}-${randomUUID().slice(0, 8)}`;
+    const content = JSON.stringify({ text });
     writeOutboundDirect(agentGroup.id, session.id, {
       id: messageId,
       kind: 'agent',
       platformId: target.platform_id,
       channelType: target.channel_type,
       threadId: null,
-      content: JSON.stringify({ text }),
+      content,
     });
+
+    // --record: mirror the delivered text into the OWNING agent's inbound.db so
+    // it appears in that agent's own conversation history. trigger:0 means the
+    // row is accumulated context only — it does NOT wake the container; it rides
+    // along on the next real turn (see getPendingMessages / countDueMessages).
+    // kind:'delivered' renders via the formatter as a "you already delivered
+    // this" block, so the agent neither re-sends it (teen cold-open) nor forgets
+    // it (parent escalation). The inbound row id is derived from the outbound id
+    // for traceability; they live in separate DBs so there is no collision.
+    //
+    // CHANNEL-FIRST: delivery (writeOutboundDirect, above) already happened. The
+    // history seed is best-effort — if it throws, we must NOT fail the command,
+    // or a caller that retries on non-zero exit (e.g. Pan's escalation-watcher)
+    // would RE-DELIVER an already-sent message (double-alert on the safety path).
+    // So a seed failure is logged loudly and reported via `recorded:false`, never
+    // raised. The flag's whole purpose (agent visibility) degrades gracefully to
+    // the pre-flag behavior (delivery-only) on seed failure.
+    let recordedMessageId: string | null = null;
+    let recorded = false;
+    if (record) {
+      recordedMessageId = `${messageId}-rec`;
+      try {
+        writeSessionMessage(agentGroup.id, session.id, {
+          id: recordedMessageId,
+          kind: 'delivered',
+          timestamp: new Date().toISOString(),
+          platformId: target.platform_id,
+          channelType: target.channel_type,
+          threadId: null,
+          content,
+          trigger: 0,
+        });
+        recorded = true;
+      } catch (err) {
+        recordedMessageId = null;
+        log.error('messages send --record: history seed failed (delivery already succeeded)', {
+          folder,
+          agentGroupId: agentGroup.id,
+          sessionId: session.id,
+          messageId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
 
     return {
       delivered: true,
+      recorded,
       folder,
       agentGroupId: agentGroup.id,
       messagingGroupId: target.id,
@@ -137,6 +197,7 @@ register({
       platformId: target.platform_id,
       sessionId: session.id,
       messageId,
+      recordedMessageId,
     };
   },
 });

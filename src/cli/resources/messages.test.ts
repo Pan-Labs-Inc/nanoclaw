@@ -16,9 +16,11 @@ vi.mock('../../db/messaging-groups.js', () => ({
 
 const mockResolveSession = vi.fn();
 const mockWriteOutboundDirect = vi.fn();
+const mockWriteSessionMessage = vi.fn();
 vi.mock('../../session-manager.js', () => ({
   resolveSession: (...args: unknown[]) => mockResolveSession(...args),
   writeOutboundDirect: (...args: unknown[]) => mockWriteOutboundDirect(...args),
+  writeSessionMessage: (...args: unknown[]) => mockWriteSessionMessage(...args),
 }));
 
 // Importing the module registers `messages-send` in the registry as a side effect.
@@ -93,6 +95,97 @@ describe('messages send — folder → channel resolution + outbound payload', (
     });
     expect(typeof message.id).toBe('string');
     expect(message.id.length).toBeGreaterThan(0);
+  });
+
+  it('does NOT seed inbound history unless --record is passed (delivery-only default)', async () => {
+    mockGetAgentGroupByFolder.mockReturnValue({ id: 'ag-1', folder: 'pan-parent-abc123' });
+    mockGetMessagingGroupsByAgentGroup.mockReturnValue([
+      { id: 'mg-1', channel_type: 'telegram', platform_id: '99887766' },
+    ]);
+    mockResolveSession.mockReturnValue({ session: { id: 'sess-xyz', agent_group_id: 'ag-1' }, created: false });
+
+    const resp = await dispatch(
+      { id: 'r1b', command: 'messages-send', args: { folder: 'pan-parent-abc123', text: 'hi' } },
+      { caller: 'host' },
+    );
+
+    expect(resp.ok).toBe(true);
+    expect(mockWriteOutboundDirect).toHaveBeenCalledTimes(1);
+    // No --record → the owning agent's inbound.db is untouched.
+    expect(mockWriteSessionMessage).not.toHaveBeenCalled();
+  });
+
+  it('with --record, ALSO seeds the owning agent inbound.db as a kind:delivered, trigger:0 row', async () => {
+    mockGetAgentGroupByFolder.mockReturnValue({ id: 'ag-1', folder: 'pan-teen-abc123' });
+    mockGetMessagingGroupsByAgentGroup.mockReturnValue([
+      { id: 'mg-1', channel_type: 'telegram', platform_id: '99887766' },
+    ]);
+    mockResolveSession.mockReturnValue({ session: { id: 'sess-xyz', agent_group_id: 'ag-1' }, created: false });
+
+    const resp = await dispatch(
+      {
+        id: 'r1c',
+        command: 'messages-send',
+        // Bare `--record` parses to boolean true (client.ts).
+        args: { folder: 'pan-teen-abc123', text: 'Hey 👋 I’m Pan', record: true },
+      },
+      { caller: 'host' },
+    );
+
+    expect(resp.ok).toBe(true);
+    // Delivery still happens (outbound), AND the inbound history row is written.
+    expect(mockWriteOutboundDirect).toHaveBeenCalledTimes(1);
+    expect(mockWriteSessionMessage).toHaveBeenCalledTimes(1);
+
+    const [agentGroupId, sessionId, message] = mockWriteSessionMessage.mock.calls[0];
+    expect(agentGroupId).toBe('ag-1');
+    expect(sessionId).toBe('sess-xyz');
+    expect(message).toMatchObject({
+      kind: 'delivered',
+      trigger: 0,
+      platformId: '99887766',
+      channelType: 'telegram',
+      content: JSON.stringify({ text: 'Hey 👋 I’m Pan' }),
+    });
+    // The inbound (history) row content must match the outbound (delivered) text verbatim.
+    const outbound = mockWriteOutboundDirect.mock.calls[0][2];
+    expect(message.content).toBe(outbound.content);
+
+    if (resp.ok) {
+      expect(resp.data).toMatchObject({ delivered: true, recorded: true });
+    }
+  });
+
+  it('CHANNEL-FIRST: a --record history-seed failure does NOT fail the command (no retry/double-send)', async () => {
+    // Regression: delivery (writeOutboundDirect) already happened. If the inbound
+    // history seed throws and we let it bubble, the command exits non-zero and a
+    // retry-on-failure caller (the escalation-watcher) re-delivers an already-sent
+    // alert — a double-alert on the safety path. The seed must degrade gracefully.
+    mockGetAgentGroupByFolder.mockReturnValue({ id: 'ag-1', folder: 'pan-parent-abc123' });
+    mockGetMessagingGroupsByAgentGroup.mockReturnValue([
+      { id: 'mg-1', channel_type: 'telegram', platform_id: '99887766' },
+    ]);
+    mockResolveSession.mockReturnValue({ session: { id: 'sess-xyz', agent_group_id: 'ag-1' }, created: false });
+    mockWriteSessionMessage.mockImplementation(() => {
+      throw new Error('inbound.db locked');
+    });
+
+    const resp = await dispatch(
+      {
+        id: 'r1d',
+        command: 'messages-send',
+        args: { folder: 'pan-parent-abc123', text: 'Pan flagged a safety concern', record: true },
+      },
+      { caller: 'host' },
+    );
+
+    // Delivery succeeded → command succeeds (ok), so the caller does NOT retry.
+    expect(resp.ok).toBe(true);
+    expect(mockWriteOutboundDirect).toHaveBeenCalledTimes(1);
+    if (resp.ok) {
+      // But the seed is reported as not recorded, so the failure is visible.
+      expect(resp.data).toMatchObject({ delivered: true, recorded: false });
+    }
   });
 
   it('errors (non-zero / not ok) on an unknown folder and does NOT write outbound', async () => {
