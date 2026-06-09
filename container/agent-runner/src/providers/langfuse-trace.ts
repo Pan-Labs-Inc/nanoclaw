@@ -16,9 +16,18 @@
  * interface. The SDK construction, the offset sidecar, and the hook wiring live
  * in ./claude.ts so this file stays free of I/O and global state.
  *
- * Privacy: message text and tool input/output are replaced with
- * `[redacted: N chars]` unless LANGFUSE_LOG_PROMPTS is truthy. Trace *structure*
- * (turn shape, timings, token counts, tool names, model) is always sent.
+ * Privacy is a three-tier dial, `LANGFUSE_LOG_LEVEL`:
+ *   - `redacted` (default): teen conversation, tool I/O, injected scaffolding, and
+ *     the composed system prompt are all withheld — only trace *structure* (turn
+ *     shape, timings, token counts, tool names, model) ships.
+ *   - `system`: also ship the composed system prompt (CLAUDE.md / CLAUDE.local.md /
+ *     shared base) and the host-injected scaffolding lines (gate imperatives,
+ *     cold-open, cross-agent deliveries). The teen↔agent *dialogue* and tool I/O
+ *     stay redacted. This is the prod-safe "what's really in the prompt" tier.
+ *   - `full`: everything, including dialogue and tool I/O. Intended for the test
+ *     environment (synthetic teens), never teen prod.
+ * Trace structure is always sent. Thinking blocks are NEVER sent at any tier.
+ * `LANGFUSE_LOG_PROMPTS=1` is kept as a back-compat alias for `full`.
  */
 
 const DEFAULT_LANGFUSE_HOST = 'https://cloud.langfuse.com';
@@ -33,13 +42,31 @@ function isTruthy(value: string | undefined): boolean {
   return v === '1' || v === 'true' || v === 'yes' || v === 'on';
 }
 
+/**
+ * Privacy tier for what content (beyond trace structure) is exported. See the
+ * module header for the full contract.
+ */
+export type LogLevel = 'redacted' | 'system' | 'full';
+
+/**
+ * Resolve the privacy tier from env. `LANGFUSE_LOG_LEVEL` wins when it names a
+ * valid tier; otherwise the legacy `LANGFUSE_LOG_PROMPTS` boolean maps truthy →
+ * `full`. Anything unrecognised falls back to the safe default, `redacted`.
+ */
+export function resolveLogLevel(env: Record<string, string | undefined>): LogLevel {
+  const raw = env.LANGFUSE_LOG_LEVEL?.trim().toLowerCase();
+  if (raw === 'redacted' || raw === 'system' || raw === 'full') return raw;
+  if (isTruthy(env.LANGFUSE_LOG_PROMPTS)) return 'full';
+  return 'redacted';
+}
+
 /** Resolved Langfuse configuration, derived once from the container env. */
 export interface LangfuseConfig {
   publicKey: string;
   secretKey: string;
   baseUrl: string;
   environment?: string;
-  logPrompts: boolean;
+  logLevel: LogLevel;
 }
 
 /**
@@ -57,7 +84,7 @@ export function resolveLangfuseConfig(env: Record<string, string | undefined>): 
   const rawEnv = env.LANGFUSE_ENVIRONMENT?.trim().toLowerCase();
   const environment = rawEnv && LANGFUSE_ENV_RE.test(rawEnv) ? rawEnv : undefined;
 
-  return { publicKey, secretKey, baseUrl, environment, logPrompts: isTruthy(env.LANGFUSE_LOG_PROMPTS) };
+  return { publicKey, secretKey, baseUrl, environment, logLevel: resolveLogLevel(env) };
 }
 
 // ── Transcript shapes (a subset of Claude Code's JSONL rows) ──
@@ -98,12 +125,14 @@ interface TranscriptEntry {
 // ── Redaction ──
 
 /**
- * Redact content unless prompt logging is opted in. Keeps the *shape* of the
- * data (a length-tagged placeholder) so traces remain useful for debugging
- * structure/flow without exposing teen conversation text.
+ * Redact teen↔agent dialogue and tool I/O unless the tier is `full`. Keeps the
+ * *shape* of the data (a length-tagged placeholder) so traces remain useful for
+ * debugging structure/flow without exposing conversation text. Note `system` is
+ * intentionally as strict as `redacted` here — system-tier exposure is limited to
+ * scaffolding (system prompt + injected lines), not the conversation itself.
  */
-export function redact(value: unknown, logPrompts: boolean): unknown {
-  if (logPrompts) return value;
+export function redact(value: unknown, logLevel: LogLevel): unknown {
+  if (logLevel === 'full') return value;
   if (value == null) return value;
   const len = typeof value === 'string' ? value.length : JSON.stringify(value).length;
   return `[redacted: ${len} chars]`;
@@ -138,6 +167,14 @@ interface Turn {
   assistants: TranscriptEntry[];
   /** tool_use_id → tool_result content, collected from follow-up user rows. */
   toolResults: Map<string, unknown>;
+  /**
+   * Host-injected scaffolding that preceded this turn — session-start gate
+   * imperatives, the cold-open, cross-agent deliveries. These arrive as `isMeta`
+   * user rows. Captured here (not dropped) so the `system` tier can surface what
+   * the agent was actually told, which is central to debugging onboarding and
+   * cross-agent messaging.
+   */
+  injected: string[];
 }
 
 export interface ParseResult {
@@ -169,26 +206,42 @@ export function parseTranscriptTurns(fullContent: string, fromOffset: number): P
     if (!line.trim()) continue;
     try {
       const e = JSON.parse(line) as TranscriptEntry;
-      if (e.isMeta || e.isSidechain) continue;
+      // Subagent sidechains are noise here; meta rows are kept — they carry the
+      // host-injected scaffolding we want at the `system` tier.
+      if (e.isSidechain) continue;
       if (e.type === 'user' || e.type === 'assistant') entries.push(e);
     } catch {
       /* skip unparseable lines */
     }
   }
 
+  const newTurn = (user?: TranscriptEntry): Turn => ({ user, assistants: [], toolResults: new Map(), injected: [] });
+
   const turns: Turn[] = [];
   let current: Turn | null = null;
+  // Injected lines that arrive before any turn this batch (e.g. the session-start
+  // imperative) attach to the next real turn rather than spawning a phantom one.
+  let pendingInjected: string[] = [];
   for (const e of entries) {
     if (isUserPrompt(e)) {
-      current = { user: e, assistants: [], toolResults: new Map() };
+      current = newTurn(e);
+      current.injected = pendingInjected;
+      pendingInjected = [];
       turns.push(current);
+      continue;
+    }
+    if (e.type === 'user' && e.isMeta) {
+      const t = textOf(e);
+      if (t) (current ? current.injected : pendingInjected).push(t);
       continue;
     }
     // Assistant output / tool results before any prompt in this batch belong to
     // a turn whose prompt was consumed earlier — anchor a userless turn so the
     // work is still traced rather than dropped.
     if (!current) {
-      current = { assistants: [], toolResults: new Map() };
+      current = newTurn();
+      current.injected = pendingInjected;
+      pendingInjected = [];
       turns.push(current);
     }
     if (e.type === 'assistant') {
@@ -198,6 +251,13 @@ export function parseTranscriptTurns(fullContent: string, fromOffset: number): P
         if (b.type === 'tool_result' && b.tool_use_id) current.toolResults.set(b.tool_use_id, b.content);
       }
     }
+  }
+
+  // Trailing injected lines with no following turn: attach to the last turn so
+  // scaffolding is never silently lost (rare — meta normally precedes a turn).
+  if (pendingInjected.length) {
+    if (turns.length) turns[turns.length - 1].injected.push(...pendingInjected);
+    else turns.push({ ...newTurn(), injected: pendingInjected });
   }
 
   return { turns, newOffset: safeOffset + consumedBytes };
@@ -241,7 +301,7 @@ export interface TraceContext {
   sessionId: string;
   userId?: string;
   environment?: string;
-  logPrompts: boolean;
+  logLevel: LogLevel;
 }
 
 function parseDate(ts?: string): Date | undefined {
@@ -255,9 +315,12 @@ let synthCounter = 0;
 /** Map parsed turns to plain trace payloads. No SDK, no I/O — pure transform. */
 export function buildTracePayloads(turns: Turn[], ctx: TraceContext): TracePayload[] {
   const out: TracePayload[] = [];
+  // Scaffolding (the system prompt + injected lines) is exposed at `system` and
+  // `full`; dialogue/tool I/O only at `full` (via redact).
+  const showScaffold = ctx.logLevel !== 'redacted';
 
   for (const turn of turns) {
-    if (turn.assistants.length === 0 && !turn.user) continue;
+    if (turn.assistants.length === 0 && !turn.user && turn.injected.length === 0) continue;
 
     const anchorId = turn.user?.uuid || turn.assistants[0]?.uuid || `synth-${ctx.sessionId}-${synthCounter++}`;
     const userText = turn.user ? textOf(turn.user) : '';
@@ -273,8 +336,8 @@ export function buildTracePayloads(turns: Turn[], ctx: TraceContext): TracePaylo
           id: b.id || `${a.uuid}-tool-${b.name}`,
           name: b.name || 'tool',
           startTime: parseDate(a.timestamp) || new Date(0),
-          input: redact(b.input, ctx.logPrompts),
-          output: redact(turn.toolResults.get(b.id || ''), ctx.logPrompts),
+          input: redact(b.input, ctx.logLevel),
+          output: redact(turn.toolResults.get(b.id || ''), ctx.logLevel),
         }));
 
       const u = a.message?.usage;
@@ -293,7 +356,7 @@ export function buildTracePayloads(turns: Turn[], ctx: TraceContext): TracePaylo
         model: a.message?.model,
         startTime: parseDate(a.timestamp) || new Date(0),
         usage,
-        output: redact(assistantText, ctx.logPrompts),
+        output: redact(assistantText, ctx.logLevel),
         metadata: {
           cache_read_input_tokens: u?.cache_read_input_tokens,
           cache_creation_input_tokens: u?.cache_creation_input_tokens,
@@ -310,19 +373,107 @@ export function buildTracePayloads(turns: Turn[], ctx: TraceContext): TracePaylo
       userId: ctx.userId,
       tags: ['claude-code', ctx.environment].filter((t): t is string => !!t),
       timestamp: parseDate(turn.user?.timestamp),
-      input: redact(userText, ctx.logPrompts),
-      output: redact(lastAssistantText, ctx.logPrompts),
+      input: redact(userText, ctx.logLevel),
+      output: redact(lastAssistantText, ctx.logLevel),
       metadata: {
         source: 'claude-code',
         assistant_message_count: turn.assistants.length,
         tool_count: generations.reduce((n, g) => n + g.tools.length, 0),
         cc_version: turn.user?.version || turn.assistants[0]?.version,
+        injected_count: turn.injected.length,
+        // Host-injected scaffolding text — exposed at `system`/`full`, length-tagged
+        // otherwise so its presence is still visible without leaking content.
+        injected_messages: turn.injected.length
+          ? showScaffold
+            ? turn.injected
+            : `[redacted: ${turn.injected.length} message(s)]`
+          : undefined,
       },
       generations,
     });
   }
 
   return out;
+}
+
+// ── System-prompt capture ──
+
+/**
+ * The composed system-prompt layers the container actually ran with. NanoClaw v2
+ * composes the final `CLAUDE.md` at spawn from the shared base + `CLAUDE.local.md`
+ * (the per-family persona Pan compiles). None of this is echoed into the
+ * transcript, so it is read from disk by the hook and passed here verbatim.
+ */
+export interface SystemPromptFiles {
+  /** Composed group CLAUDE.md (imports the shared base + the persona). */
+  claudeMd?: string;
+  /** Per-family persona Pan compiles (the `CLAUDE.local.md` that #611 silently dropped). */
+  claudeLocalMd?: string;
+  /** Cluster-wide shared base (`.claude-shared.md`, from prompts/pan/global.md). */
+  sharedBase?: string;
+}
+
+/** Does the composed CLAUDE.md actually `@import` the cluster-wide shared base? */
+function importsSharedBase(claudeMd?: string): boolean {
+  return !!claudeMd && /@[^\s]*\.claude-shared\.md/.test(claudeMd);
+}
+
+/** Optional facts the hook knows but the files don't carry. */
+export interface SystemPromptContext {
+  /**
+   * Whether the SDK's `settingSources` includes `'local'` — the mechanism that
+   * loads CLAUDE.local.md. Its absence (not an `@import`) was the #611 root
+   * cause, so this is the at-a-glance "persona actually wired in?" signal.
+   */
+  localSettingEnabled?: boolean;
+}
+
+/**
+ * Build a once-per-session trace carrying the composed system prompt. Returns
+ * `null` at the `redacted` tier (the system prompt is scaffolding, exposed only
+ * at `system`/`full`). The id is derived from the session so re-emission upserts
+ * rather than duplicates.
+ *
+ * The "persona never loaded" bug class (#611) shows up as
+ * `has_claude_local: true` (the persona was compiled on disk) together with
+ * `settings_local_enabled: false` (but the SDK was not told to load it). The
+ * shared base loads via an `@import` in CLAUDE.md, so `shared_base_imported`
+ * catches the analogous "shared base not wired" failure straight from the file.
+ */
+export function buildSystemPromptPayload(
+  files: SystemPromptFiles,
+  ctx: TraceContext,
+  opts: SystemPromptContext = {},
+): TracePayload | null {
+  if (ctx.logLevel === 'redacted') return null;
+
+  const bytes = (s?: string) => (typeof s === 'string' ? s.length : 0);
+  const metadata: Record<string, unknown> = {
+    source: 'claude-code',
+    kind: 'system-prompt',
+    has_claude_local: !!files.claudeLocalMd,
+    settings_local_enabled: opts.localSettingEnabled ?? null,
+    shared_base_imported: importsSharedBase(files.claudeMd),
+    claude_md_bytes: bytes(files.claudeMd),
+    claude_local_bytes: bytes(files.claudeLocalMd),
+    shared_base_bytes: bytes(files.sharedBase),
+  };
+
+  return {
+    id: `sysprompt-${ctx.sessionId}`,
+    name: 'system-prompt',
+    sessionId: ctx.sessionId,
+    userId: ctx.userId,
+    tags: ['claude-code', 'system-prompt', ctx.environment].filter((t): t is string => !!t),
+    input: {
+      claudeMd: files.claudeMd ?? null,
+      claudeLocalMd: files.claudeLocalMd ?? null,
+      sharedBase: files.sharedBase ?? null,
+    },
+    output: undefined,
+    metadata,
+    generations: [],
+  };
 }
 
 // ── Emission (minimal Langfuse-client interface, so the SDK stays in claude.ts) ──
