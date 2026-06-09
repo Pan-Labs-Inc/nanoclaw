@@ -80,6 +80,24 @@ describe('timestamp formatting', () => {
   });
 });
 
+describe('delivered kind (host-sent, recorded into the owning agent history)', () => {
+  it('renders a <delivered_to_user> block carrying the verbatim text', () => {
+    insertMessage('m1', 'delivered', { text: 'Hey 👋 I’m Pan — what are you into?' });
+    const result = formatMessages(getPendingMessages());
+    expect(result).toContain('<delivered_to_user');
+    expect(result).toContain('Hey 👋 I’m Pan — what are you into?');
+    expect(result).toContain('</delivered_to_user>');
+    // It is NOT rendered as a user <message> the agent must answer.
+    expect(result).not.toMatch(/<message[ >]/);
+  });
+
+  it('XML-escapes delivered text', () => {
+    insertMessage('m1', 'delivered', { text: 'a & b <tag> "q"' });
+    const result = formatMessages(getPendingMessages());
+    expect(result).toContain('a &amp; b &lt;tag&gt; &quot;q&quot;');
+  });
+});
+
 describe('reply_to + quoted_message rendering', () => {
   it('renders reply_to attribute and quoted_message when all fields present', () => {
     insertMessage('m1', 'chat', {

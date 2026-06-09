@@ -135,6 +135,7 @@ export function formatMessages(messages: MessageInRow[]): string {
   const taskMessages = messages.filter((m) => m.kind === 'task');
   const webhookMessages = messages.filter((m) => m.kind === 'webhook');
   const systemMessages = messages.filter((m) => m.kind === 'system');
+  const deliveredMessages = messages.filter((m) => m.kind === 'delivered');
 
   const parts: string[] = [];
 
@@ -149,6 +150,9 @@ export function formatMessages(messages: MessageInRow[]): string {
   }
   if (systemMessages.length > 0) {
     parts.push(...systemMessages.map(formatSystemMessage));
+  }
+  if (deliveredMessages.length > 0) {
+    parts.push(...deliveredMessages.map(formatDeliveredMessage));
   }
 
   return header + parts.join('\n\n');
@@ -214,6 +218,23 @@ function formatWebhookMessage(msg: MessageInRow): string {
   const event = content.event || 'unknown';
   const from = originAttr(msg);
   return `<webhook${from} source="${escapeXml(source)}" event="${escapeXml(event)}">${JSON.stringify(content.payload || content, null, 2)}</webhook>`;
+}
+
+/**
+ * Render a `kind: 'delivered'` row: a message the HOST already delivered to the
+ * user on this agent's behalf (e.g. a host-pushed onboarding cold-open, or a
+ * watcher-delivered parent escalation), seeded into inbound.db with `trigger: 0`
+ * so the agent sees it as prior context without it being a new user message to
+ * answer. The agent should treat the body as something IT already said — do not
+ * repeat it, but do remember it was sent. The self-describing tag name carries
+ * that semantics; agent prompts elaborate where it matters.
+ */
+function formatDeliveredMessage(msg: MessageInRow): string {
+  const content = parseContent(msg.content);
+  const from = originAttr(msg);
+  const time = formatLocalTime(msg.timestamp, TIMEZONE);
+  const text = content.text || '';
+  return `<delivered_to_user${from} time="${escapeXml(time)}">${escapeXml(text)}</delivered_to_user>`;
 }
 
 function formatSystemMessage(msg: MessageInRow): string {
