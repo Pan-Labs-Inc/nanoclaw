@@ -7,12 +7,14 @@ import { Langfuse } from 'langfuse';
 import { clearContainerToolInFlight, setContainerToolInFlight } from '../db/connection.js';
 import { registerProvider } from './provider-registry.js';
 import {
+  buildSystemPromptPayload,
   buildTracePayloads,
   emitTracePayloads,
   parseTranscriptTurns,
   resolveLangfuseConfig,
   type LangfuseConfig,
   type LangfuseLike,
+  type SystemPromptFiles,
 } from './langfuse-trace.js';
 import type { AgentProvider, AgentQuery, McpServerConfig, ProviderEvent, ProviderOptions, QueryInput } from './types.js';
 
@@ -278,13 +280,57 @@ function writeOffset(transcriptPath: string, offset: number): void {
   }
 }
 
+/** Read a system-prompt layer from the group workspace; missing → undefined. */
+function readMaybe(file: string): string | undefined {
+  try {
+    return fs.readFileSync(file, 'utf-8');
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The composed system prompt is a spawn-time artifact (not in the transcript), so
+ * we read it from the workspace and emit it once per session. Gated on the first
+ * export of the session (offset 0) and on a `system`/`full` tier; the trace id is
+ * session-derived so a repeat would upsert harmlessly. Best-effort and quiet on a
+ * missing cwd — a tracing miss must never perturb the turn.
+ */
+function maybeEmitSystemPrompt(
+  client: Langfuse,
+  cfg: LangfuseConfig,
+  ctx: { sessionId: string; cwd?: string; localSettingEnabled: boolean },
+): void {
+  if (cfg.logLevel === 'redacted' || !ctx.cwd) return;
+  const files: SystemPromptFiles = {
+    claudeMd: readMaybe(path.join(ctx.cwd, 'CLAUDE.md')),
+    claudeLocalMd: readMaybe(path.join(ctx.cwd, 'CLAUDE.local.md')),
+    sharedBase: readMaybe(path.join(ctx.cwd, '.claude-shared.md')),
+  };
+  const payload = buildSystemPromptPayload(
+    files,
+    { sessionId: ctx.sessionId, environment: cfg.environment, logLevel: cfg.logLevel },
+    { localSettingEnabled: ctx.localSettingEnabled },
+  );
+  if (!payload) return;
+  emitTracePayloads(client as unknown as LangfuseLike, [payload]);
+  log(
+    `Langfuse: captured system prompt for session ${ctx.sessionId} ` +
+      `(has_local=${payload.metadata.has_claude_local} settings_local=${payload.metadata.settings_local_enabled})`,
+  );
+}
+
 /**
  * Stop hook: after each turn, read the new transcript lines, build Langfuse
  * traces, and push them. Runs in the agent-runner process *after* the response
  * completes, so a slow or failing export can never hang a teen's turn. No-op —
  * and zero client construction — unless Langfuse is fully configured.
  */
-function createStopHook(env: Record<string, string | undefined>, assistantName?: string): HookCallback {
+function createStopHook(
+  env: Record<string, string | undefined>,
+  assistantName?: string,
+  localSettingEnabled = false,
+): HookCallback {
   return async (input) => {
     const cfg = resolveLangfuseConfig(env);
     if (!cfg) return {};
@@ -294,26 +340,33 @@ function createStopHook(env: Record<string, string | undefined>, assistantName?:
 
     try {
       if (!fs.existsSync(transcriptPath)) return {};
+      const startOffset = readOffset(transcriptPath);
       const content = fs.readFileSync(transcriptPath, 'utf-8');
-      const { turns, newOffset } = parseTranscriptTurns(content, readOffset(transcriptPath));
+      const { turns, newOffset } = parseTranscriptTurns(content, startOffset);
+
+      const client = getLangfuseClient(cfg);
+      // The composed system prompt only changes at spawn, so capture it once, on
+      // the session's first export. Independent of whether this batch had turns.
+      if (startOffset === 0) maybeEmitSystemPrompt(client, cfg, { sessionId, cwd, localSettingEnabled });
+
       if (turns.length === 0) {
         writeOffset(transcriptPath, newOffset);
+        void client.flushAsync();
         return {};
       }
 
       // The agent identity (e.g. a per-family group name) can be identifying, so
-      // it is gated behind the same opt-in as content. Default-off tracing groups
-      // turns by sessionId alone — enough for per-session debugging without
+      // it is gated to the `full` tier (test env). The default and `system` tiers
+      // group turns by sessionId alone — enough for per-session debugging without
       // exporting a per-tenant identifier to Langfuse.
-      const userId = cfg.logPrompts ? assistantName || (cwd ? path.basename(cwd) : undefined) : undefined;
+      const userId = cfg.logLevel === 'full' ? assistantName || (cwd ? path.basename(cwd) : undefined) : undefined;
       const payloads = buildTracePayloads(turns, {
         sessionId,
         userId,
         environment: cfg.environment,
-        logPrompts: cfg.logPrompts,
+        logLevel: cfg.logLevel,
       });
 
-      const client = getLangfuseClient(cfg);
       const emitted = emitTracePayloads(client as unknown as LangfuseLike, payloads);
       // Don't await the flush — the SDK drains in the background; the persisted
       // offset guards against re-sending if a flush is lost on shutdown.
@@ -380,6 +433,11 @@ export class ClaudeProvider implements AgentProvider {
 
     const instructions = input.systemContext?.instructions;
 
+    // 'local' is what loads the per-group CLAUDE.local.md persona (see below).
+    // Threaded into the Stop hook's system-prompt capture so a trace records the
+    // actual loading wiring — the #611 root cause was this missing 'local'.
+    const settingSources: Array<'project' | 'user' | 'local'> = ['project', 'user', 'local'];
+
     const sdkResult = sdkQuery({
       prompt: stream,
       options: {
@@ -403,14 +461,14 @@ export class ClaudeProvider implements AgentProvider {
         // family). 'project' alone loads only CLAUDE.md, whose composed form
         // imports the shared base + fragments but NOT CLAUDE.local.md — so
         // without 'local' the per-group prompt is silently never read.
-        settingSources: ['project', 'user', 'local'],
+        settingSources,
         mcpServers: this.mcpServers,
         hooks: {
           PreToolUse: [{ hooks: [preToolUseHook] }],
           PostToolUse: [{ hooks: [postToolUseHook] }],
           PostToolUseFailure: [{ hooks: [postToolUseHook] }],
           PreCompact: [{ hooks: [createPreCompactHook(this.assistantName)] }],
-          Stop: [{ hooks: [createStopHook(this.env, this.assistantName)] }],
+          Stop: [{ hooks: [createStopHook(this.env, this.assistantName, settingSources.includes('local'))] }],
         },
       },
     });
