@@ -11,11 +11,12 @@ import fs from 'fs';
 import path from 'path';
 
 import { DATA_DIR } from '../config.js';
+import { getMessagingGroupByPlatform, getMessagingGroupAgents } from '../db/index.js';
 import { getActiveSessions } from '../db/sessions.js';
 import { updateDeliveredStatusByPlatformMessageId } from '../db/session-db.js';
 import { readEnvFile } from '../env.js';
 import { log } from '../log.js';
-import { openInboundDb } from '../session-manager.js';
+import { openInboundDb, resolveSession, writeSessionMessage } from '../session-manager.js';
 import { registerWebhookHandler, unregisterWebhookHandler, type WebhookHandler } from '../webhook-server.js';
 import type { ChannelAdapter, ChannelSetup, InboundMessage, OutboundMessage } from './adapter.js';
 import { registerChannelAdapter } from './channel-registry.js';
@@ -50,6 +51,8 @@ export interface SmsConfig {
   fetchImpl?: FetchLike;
   /** Override activation state resolution for testing. Production uses the opt-out store + DM registrations file. */
   checkActivationState?: (phone: string) => 'active' | 'pending' | 'suppressed';
+  /** Override awareness seeding for testing. Production writes to the owning agent's session DB. */
+  seedControlEvent?: (phone: string, action: SmsControlAction, prevState: 'active' | 'pending' | 'suppressed') => void;
 }
 
 export interface TwilioInbound {
@@ -436,6 +439,68 @@ function resolveActivationState(phone: string, config: SmsConfig): 'active' | 'p
   }
 }
 
+/**
+ * Seed the owning agent's session with an awareness message when a control-event
+ * changes the channel's activation state. Uses the injectable `seedControlEvent`
+ * hook when provided (test path); otherwise writes directly to session DB.
+ */
+function seedControlEventAwareness(
+  phone: string,
+  action: SmsControlAction,
+  prevState: 'active' | 'pending' | 'suppressed',
+  config: SmsConfig,
+): void {
+  if (config.seedControlEvent) {
+    config.seedControlEvent(phone, action, prevState);
+    return;
+  }
+
+  let prompt: string | null = null;
+  let trigger: 0 | 1 = 1;
+
+  if (action === 'start') {
+    if (prevState === 'pending') {
+      prompt = 'User sent START — SMS channel is now active';
+    } else if (prevState === 'suppressed') {
+      prompt = 'User sent START — SMS channel re-activated after STOP';
+      trigger = 0;
+    }
+  } else if (action === 'stop' && prevState === 'active') {
+    prompt =
+      'User sent STOP — channel suppressed; do not schedule outreach; inform the counterpart agent per your instructions';
+  }
+
+  if (!prompt) return;
+
+  const seedPrompt = prompt;
+  const seedTrigger = trigger;
+  try {
+    const messagingGroup = getMessagingGroupByPlatform('sms', phone);
+    if (!messagingGroup) return;
+
+    const wirings = getMessagingGroupAgents(messagingGroup.id);
+    const now = new Date().toISOString();
+    for (const wiring of wirings) {
+      const { session } = resolveSession(wiring.agent_group_id, messagingGroup.id, null, wiring.session_mode);
+      writeSessionMessage(wiring.agent_group_id, session.id, {
+        id: `sms-aware-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        kind: 'task',
+        timestamp: now,
+        platformId: phone,
+        channelType: 'sms',
+        content: JSON.stringify({ prompt: seedPrompt }),
+        trigger: seedTrigger,
+      });
+    }
+  } catch (err) {
+    log.warn('Failed to seed SMS control event awareness', {
+      phone: redactSmsPhone(phone),
+      action,
+      err,
+    });
+  }
+}
+
 /** Build the shared webhook handler for inbound SMS and Twilio delivery callbacks. */
 export function createSmsWebhookHandler(config: SmsConfig, hostConfig: ChannelSetup): WebhookHandler {
   return async (request) => {
@@ -460,19 +525,26 @@ export function createSmsWebhookHandler(config: SmsConfig, hostConfig: ChannelSe
     if (!inbound.from) return textResponse('Missing From', 400);
     if (!E164_PHONE_RE.test(inbound.from)) return textResponse('Invalid From', 400);
 
+    // Capture activation state before keyword processing so seeding can determine
+    // the pre-transition state (pending/suppressed/active).
+    const preControlState = resolveActivationState(inbound.from, config);
+
     // Control keywords are handled before agent routing. If Twilio Advanced
     // Opt-Out included OptOutType, Twilio owns the user-facing keyword reply;
     // NanoClaw only mirrors the state locally for outbound suppression.
     const control = handleSmsControlMessage(inbound.from, inbound.body, config, inbound.optOutType);
-    if (control) return twimlResponse(control.reply);
+    if (control) {
+      seedControlEventAwareness(inbound.from, control.action, preControlState, config);
+      return twimlResponse(control.reply);
+    }
 
     // Consent-leak guard: drop non-keyword inbound while registration is pending
     // (require_opt_in=true, no fresh START) or suppressed (post-STOP).
-    const activationState = resolveActivationState(inbound.from, config);
-    if (activationState !== 'active') {
+    // Reuse preControlState — handleSmsControlMessage returned null so no state changed.
+    if (preControlState !== 'active') {
       log.info('SMS inbound dropped: consent gate', {
         phone: redactSmsPhone(inbound.from),
-        activationState,
+        activationState: preControlState,
       });
       return twimlResponse();
     }

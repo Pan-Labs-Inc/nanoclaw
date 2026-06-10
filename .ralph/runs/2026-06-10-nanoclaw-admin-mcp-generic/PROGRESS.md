@@ -1,5 +1,5 @@
 STATUS: READY        <!-- READY | RUNNING | DONE | BLOCKED | STUCK -->
-CURRENT: N6.4   <!-- the step a fresh round works next; never skip ahead -->
+CURRENT: N6.5   <!-- the step a fresh round works next; never skip ahead -->
 
 # 2026-06-10-nanoclaw-admin-mcp-generic build ledger
 
@@ -181,9 +181,9 @@ operator configs, and any OTHER run's dir. Targeted add only.
 - handoff:
 
 ### N6.4 — Awareness seeding via messages_in
-- status: pending
+- status: done
 - rounds: 0
-- acceptance:
+- acceptance: see .ralph/runs/2026-06-10-nanoclaw-admin-mcp-generic/tests/N6.4.sh → src/channels/sms.test.ts — seedControlEvent hook in SmsConfig; 3 seeding tests (pending→active trigger-1, active→suppressed trigger-1, suppressed→active trigger-0); 36/36 sms tests pass; tsc clean
 - handoff:
 
 ### N6.5 — Six-scenario activation test file + prove freshness red
@@ -235,3 +235,4 @@ operator configs, and any OTHER run's dir. Targeted add only.
 #14 N6.1 PASS — sms.ts now captures now once and writes both receivedAt and at: now in recordSmsControlEvent; SmsOptOutStore.controlEvents type adds at?: string; getSmsControlEvent return type updated; admin-mcp.ts readSmsOptOutStore type adds at?: string; dmStatusTool reads event.at ?? event.receivedAt and uses strict > for activationState comparison; 4 new dm_status tests (lastControlEvent.at shape, pending state, active after START with at>registeredAt, backward compat via receivedAt fallback); 25/25 admin-mcp tests pass, 477/477 full suite not re-run but tsc clean; project test file: src/admin-mcp.test.ts.
 #15 N6.2 PASS — 2 new stale-event tests: (1) START at===registeredAt leaves pending; (2) START at<registeredAt leaves pending; implementation already present from N6.1 (strict > comparison in dmStatusTool); 27/27 admin-mcp tests pass, tsc clean; project test file: src/admin-mcp.test.ts.
 #16 N6.3 PASS — added resolveActivationState() to sms.ts; reads checkActivationState hook (injectable for tests) or falls back to opt-out store + dm-registrations.json; createSmsWebhookHandler now checks activationState after keyword handling — drops non-keyword inbound when 'pending' or 'suppressed' (log + empty TwiML, no onInbound call); added 2 tests to sms.test.ts (pending drops, suppressed drops); 33/33 sms tests pass, tsc clean; vitest runner; project test file: src/channels/sms.test.ts.
+#17 N6.4 PASS — added seedControlEvent injectable hook to SmsConfig; added seedControlEventAwareness() that determines transition (pending→active trigger-1, active→suppressed trigger-1, suppressed→active trigger-0) and seeds owning agent's session via getMessagingGroupByPlatform+getMessagingGroupAgents+resolveSession+writeSessionMessage (DB errors caught/warned); modified createSmsWebhookHandler to capture preControlState before keyword processing and pass it to seeding; added 3 tests (start+pending, stop+active, start+suppressed); 36/36 sms tests pass; tsc clean; vitest runner; project test file: src/channels/sms.test.ts.

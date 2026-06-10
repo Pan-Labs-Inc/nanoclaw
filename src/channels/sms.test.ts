@@ -964,4 +964,97 @@ describe('SMS webhook handler', () => {
     });
     expect(received).toEqual([]);
   });
+
+  it('calls seedControlEvent with start+pending when START arrives while registration is pending', async () => {
+    const storePath = optOutStorePath();
+    const seeds: Array<{ phone: string; action: string; prevState: string }> = [];
+    const config = baseConfig({
+      optOutStorePath: storePath,
+      checkActivationState: () => 'pending',
+      seedControlEvent: (phone, action, prevState) => seeds.push({ phone, action, prevState }),
+    });
+    const params = new URLSearchParams({
+      MessageSid: 'SM301',
+      From: '+15551234567',
+      To: '+15557654321',
+      Body: 'START',
+    });
+    const url = 'http://localhost/webhook/sms';
+    const handler = createSmsWebhookHandler(config, setup());
+    await handler(
+      new Request(url, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/x-www-form-urlencoded',
+          'x-twilio-signature': signature(url, params),
+        },
+        body: params.toString(),
+      }),
+      { waitUntil: () => {} },
+    );
+    expect(seeds).toHaveLength(1);
+    expect(seeds[0]).toMatchObject({ phone: '+15551234567', action: 'start', prevState: 'pending' });
+  });
+
+  it('calls seedControlEvent with stop+active when STOP arrives while channel is active', async () => {
+    const storePath = optOutStorePath();
+    const seeds: Array<{ phone: string; action: string; prevState: string }> = [];
+    const config = baseConfig({
+      optOutStorePath: storePath,
+      checkActivationState: () => 'active',
+      seedControlEvent: (phone, action, prevState) => seeds.push({ phone, action, prevState }),
+    });
+    const params = new URLSearchParams({
+      MessageSid: 'SM302',
+      From: '+15551234567',
+      To: '+15557654321',
+      Body: 'STOP',
+    });
+    const url = 'http://localhost/webhook/sms';
+    const handler = createSmsWebhookHandler(config, setup());
+    await handler(
+      new Request(url, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/x-www-form-urlencoded',
+          'x-twilio-signature': signature(url, params),
+        },
+        body: params.toString(),
+      }),
+      { waitUntil: () => {} },
+    );
+    expect(seeds).toHaveLength(1);
+    expect(seeds[0]).toMatchObject({ phone: '+15551234567', action: 'stop', prevState: 'active' });
+  });
+
+  it('calls seedControlEvent with start+suppressed when START re-activates a suppressed channel', async () => {
+    const storePath = optOutStorePath();
+    const seeds: Array<{ phone: string; action: string; prevState: string }> = [];
+    const config = baseConfig({
+      optOutStorePath: storePath,
+      checkActivationState: () => 'suppressed',
+      seedControlEvent: (phone, action, prevState) => seeds.push({ phone, action, prevState }),
+    });
+    const params = new URLSearchParams({
+      MessageSid: 'SM303',
+      From: '+15551234567',
+      To: '+15557654321',
+      Body: 'START',
+    });
+    const url = 'http://localhost/webhook/sms';
+    const handler = createSmsWebhookHandler(config, setup());
+    await handler(
+      new Request(url, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/x-www-form-urlencoded',
+          'x-twilio-signature': signature(url, params),
+        },
+        body: params.toString(),
+      }),
+      { waitUntil: () => {} },
+    );
+    expect(seeds).toHaveLength(1);
+    expect(seeds[0]).toMatchObject({ phone: '+15551234567', action: 'start', prevState: 'suppressed' });
+  });
 });
