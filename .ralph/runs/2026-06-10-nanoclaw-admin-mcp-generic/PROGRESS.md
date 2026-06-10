@@ -1,5 +1,5 @@
 STATUS: READY        <!-- READY | RUNNING | DONE | BLOCKED | STUCK -->
-CURRENT: N4-GATE   <!-- the step a fresh round works next; never skip ahead -->
+CURRENT: N5.1   <!-- the step a fresh round works next; never skip ahead -->
 
 # 2026-06-10-nanoclaw-admin-mcp-generic build ledger
 
@@ -138,9 +138,9 @@ operator configs, and any OTHER run's dir. Targeted add only.
 - handoff:
 
 ### N4-GATE — phase gate: Mount-config truth reconciliation
-- status: pending
+- status: done
 - rounds: 0
-- acceptance:
+- acceptance: see .ralph/runs/2026-06-10-nanoclaw-admin-mcp-generic/tests/N4-GATE.sh — phase N4 full suite (N1.1.sh, N2.1.sh, N3.1.sh, N3.2.sh, N4.1.sh, N4.2.sh, regression.sh) passes; verdict line present, reader-coupled assert present, 465/465 vitest pass
 - handoff:
 
 ### N5.1 — Audit logging with platform-id redaction
@@ -227,3 +227,4 @@ operator configs, and any OTHER run's dir. Targeted add only.
 #7 N3-GATE PASS — ran N3-GATE.sh (skipping *-GATE.sh to prevent cascade recursion via N2-GATE); N1.1.sh, N2.1.sh, N3.1.sh, N3.2.sh all pass; 464/464 vitest; tsc clean; phase N3 prose acceptance verified; updated regression.sh; vitest runner.
 #8 N4.1 PASS — verdict: container_configs.additional_mounts (DB); reader materializeContainerJson() in src/container-config.ts; group_mount_set now calls updateContainerConfigJson() instead of writing container.json directly; test updated to verify DB row; auto-creates agent group in DB if needed (mirrors dm_register pattern); tsc clean; 464/464 vitest pass. Project test file: src/admin-mcp.test.ts.
 #9 N4.2 PASS — added reader-coupling test in group_mount_set describe block: calls group_put x2 + group_mount_set, then calls materializeContainerJson(agentGroup.id) directly (real reader, not reimplementation), asserts additionalMounts[].containerPath + readonly + hostPath contains sourceGroup; imported materializeContainerJson from ./container-config.js; 15/15 admin-mcp tests, 465/465 full suite, tsc clean. Project test file: src/admin-mcp.test.ts.
+#10 N4-GATE PASS — ran N1.1.sh, N2.1.sh, N3.1.sh, N3.2.sh, N4.1.sh, N4.2.sh, regression.sh (skipping *-GATE.sh to prevent cascade recursion); all 465 vitest pass; verdict line present; reader-coupled assert (materializeContainerJson) present in admin-mcp.test.ts; wrote N4-GATE.sh; phase N4 prose acceptance verified.
