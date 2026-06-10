@@ -1,4 +1,5 @@
 {
   "N1.1": "scripts/q.test.ts",
-  "N2.1": "src/modules/agent-to-agent/create-agent.test.ts"
+  "N2.1": "src/modules/agent-to-agent/create-agent.test.ts",
+  "N3.1": "src/admin-mcp.test.ts"
 }

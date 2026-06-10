@@ -53,7 +53,7 @@ import './channels/index.js';
 // Modules barrel — default modules (typing, mount-security) ship here; skills
 // append registry-based modules. Imported for side effects (registrations).
 import './modules/index.js';
-import './pan-mcp.js';
+import './admin-mcp.js';
 
 // CLI command barrel — populates the `ncl` registry before the CLI server
 // accepts connections.

@@ -1,5 +1,5 @@
 STATUS: READY        <!-- READY | RUNNING | DONE | BLOCKED | STUCK -->
-CURRENT: N3.1   <!-- the step a fresh round works next; never skip ahead -->
+CURRENT: N3.2   <!-- the step a fresh round works next; never skip ahead -->
 
 # 2026-06-10-nanoclaw-admin-mcp-generic build ledger
 
@@ -107,9 +107,9 @@ operator configs, and any OTHER run's dir. Targeted add only.
 - handoff:
 
 ### N3.1 — Implement the 7-verb generic surface in src/admin-mcp.ts
-- status: pending
+- status: done
 - rounds: 0
-- acceptance:
+- acceptance: see .ralph/runs/2026-06-10-nanoclaw-admin-mcp-generic/tests/N3.1.sh → src/admin-mcp.test.ts — admin-mcp.ts exists, pan-mcp.ts gone, no banned Pan identifiers, NANOCLAW_ADMIN_MCP_TOKEN env, tsc clean, tools/list returns 7 verbs, 453/453 vitest pass
 - handoff:
 
 ### N3.2 — Rewrite the endpoint test suite as src/admin-mcp.test.ts
@@ -221,3 +221,4 @@ operator configs, and any OTHER run's dir. Targeted add only.
 #2 N1-GATE PASS — ran N1.1.sh (all 446 vitest pass, tsc clean, f624ee4 ancestor, no dep drift); wrote N1-GATE.sh + regression.sh; phase acceptance verified.
 #3 N2.1 PASS — added upstream remote (qwibitai/nanoclaw); fetched; cherry-picked c6627d3 (authorize create_agent host-side), 6227bd1 (approval-response admin authz, merge commit via -m 1), 7d15dbc (scope channel approval targets), 6420c0e (egress lockdown opt-in) — all 4 applied cleanly, no conflicts; tsc clean; 455/455 vitest pass (9 new tests from picks); disposition line in Pointers; vitest runner; project test file: src/modules/agent-to-agent/create-agent.test.ts.
 #4 N2-GATE PASS — ran N1.1.sh, N1-GATE.sh, N2.1.sh (all 455 vitest pass, tsc clean, disposition line present); wrote N2-GATE.sh; phase N2 acceptance verified.
+#5 N3.1 PASS — git mv src/pan-mcp.ts src/admin-mcp.ts; rewrote with 7 generic verbs (group_put, group_file_get, group_file_put, group_mount_set, dm_register, shared_base_write, dm_status); deleted pan-mcp.test.ts; wrote minimal src/admin-mcp.test.ts; updated src/index.ts import; tsc clean; 453/453 vitest pass; no banned Pan identifiers; project test file: src/admin-mcp.test.ts.
