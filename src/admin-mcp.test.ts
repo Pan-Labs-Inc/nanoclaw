@@ -19,6 +19,7 @@ vi.mock('./config.js', async () => {
 import { closeDb, initTestDb, runMigrations } from './db/index.js';
 import { getContainerConfig } from './db/container-configs.js';
 import { getAgentGroupByFolder } from './db/agent-groups.js';
+import { materializeContainerJson } from './container-config.js';
 import { createAdminMcpHandler } from './admin-mcp.js';
 
 const TOKEN = 'admin-mcp-token-1234567890abcdef1234';
@@ -257,6 +258,27 @@ describe('Admin MCP endpoint', () => {
       }>;
       expect(mounts[0].containerPath).toBe('/workspace/shared');
       expect(mounts[0].readonly).toBe(true);
+    });
+
+    it('mount written by group_mount_set appears in materializeContainerJson output', async () => {
+      const handler = createAdminMcpHandler({ token: TOKEN });
+      await callTool(handler, 'group_put', { groupName: 'mountdest', files: [], force: false });
+      await callTool(handler, 'group_put', { groupName: 'mountsrc', files: [], force: false });
+
+      const res = await callTool(handler, 'group_mount_set', {
+        groupName: 'mountdest',
+        mounts: [{ sourceGroup: 'mountsrc', containerPath: '/workspace/shared', readonly: true }],
+      });
+      expect(res.status).toBe(200);
+
+      const agentGroup = getAgentGroupByFolder('mountdest');
+      expect(agentGroup).toBeDefined();
+
+      const config = materializeContainerJson(agentGroup!.id);
+      const found = config.additionalMounts.find((m) => m.containerPath === '/workspace/shared');
+      expect(found).toBeDefined();
+      expect(found!.readonly).toBe(true);
+      expect(found!.hostPath).toContain('mountsrc');
     });
   });
 

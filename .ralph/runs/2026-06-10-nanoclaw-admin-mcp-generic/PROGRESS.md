@@ -1,5 +1,5 @@
 STATUS: READY        <!-- READY | RUNNING | DONE | BLOCKED | STUCK -->
-CURRENT: N4.2   <!-- the step a fresh round works next; never skip ahead -->
+CURRENT: N4-GATE   <!-- the step a fresh round works next; never skip ahead -->
 
 # 2026-06-10-nanoclaw-admin-mcp-generic build ledger
 
@@ -132,9 +132,9 @@ operator configs, and any OTHER run's dir. Targeted add only.
 - handoff:
 
 ### N4.2 — Reader-coupled mount test
-- status: pending
+- status: done
 - rounds: 0
-- acceptance:
+- acceptance: see .ralph/runs/2026-06-10-nanoclaw-admin-mcp-generic/tests/N4.2.sh → src/admin-mcp.test.ts — materializeContainerJson called on DB written by group_mount_set; additionalMounts assert containerPath + readonly + hostPath contains sourceGroup; 15/15 admin-mcp tests pass, 465/465 full suite pass, tsc clean
 - handoff:
 
 ### N4-GATE — phase gate: Mount-config truth reconciliation
@@ -226,3 +226,4 @@ operator configs, and any OTHER run's dir. Targeted add only.
 #6 N3.2 PASS — expanded src/admin-mcp.test.ts from 3 to 14 tests: path-escape rejection (group_put files[].path + group_file_put path arg), force semantics (reject existing without force / succeed with force), happy-path for all 7 verbs (group_put/file_get/file_put/mount_set/dm_register/shared_base_write/dm_status) with GROUPS_DIR fixture + save/restore container/CLAUDE.md; dm_status registered:false for unknown; vitest runner; 464/464 pass; project test file: src/admin-mcp.test.ts.
 #7 N3-GATE PASS — ran N3-GATE.sh (skipping *-GATE.sh to prevent cascade recursion via N2-GATE); N1.1.sh, N2.1.sh, N3.1.sh, N3.2.sh all pass; 464/464 vitest; tsc clean; phase N3 prose acceptance verified; updated regression.sh; vitest runner.
 #8 N4.1 PASS — verdict: container_configs.additional_mounts (DB); reader materializeContainerJson() in src/container-config.ts; group_mount_set now calls updateContainerConfigJson() instead of writing container.json directly; test updated to verify DB row; auto-creates agent group in DB if needed (mirrors dm_register pattern); tsc clean; 464/464 vitest pass. Project test file: src/admin-mcp.test.ts.
+#9 N4.2 PASS — added reader-coupling test in group_mount_set describe block: calls group_put x2 + group_mount_set, then calls materializeContainerJson(agentGroup.id) directly (real reader, not reimplementation), asserts additionalMounts[].containerPath + readonly + hostPath contains sourceGroup; imported materializeContainerJson from ./container-config.js; 15/15 admin-mcp tests, 465/465 full suite, tsc clean. Project test file: src/admin-mcp.test.ts.
