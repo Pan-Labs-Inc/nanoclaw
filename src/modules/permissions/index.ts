@@ -31,6 +31,7 @@ import type { InboundEvent } from '../../channels/adapter.js';
 import { registerResponseHandler, type ResponsePayload } from '../../response-registry.js';
 import { getDeliveryAdapter } from '../../delivery.js';
 import { log } from '../../log.js';
+import { redactUserId } from '../../platform-redaction.js';
 import type { MessagingGroup, MessagingGroupAgent } from '../../types.js';
 import { canAccessAgentGroup } from './access.js';
 import {
@@ -133,7 +134,7 @@ function handleUnknownSender(
     log.info('MESSAGE DROPPED — unknown sender (strict policy)', {
       messagingGroupId: mg.id,
       agentGroupId,
-      userId,
+      userId: redactUserId(userId),
       accessReason,
     });
     recordDroppedMessage(dropRecord);
@@ -144,7 +145,7 @@ function handleUnknownSender(
     log.info('MESSAGE DROPPED — unknown sender (approval requested)', {
       messagingGroupId: mg.id,
       agentGroupId,
-      userId,
+      userId: redactUserId(userId),
       accessReason,
     });
     recordDroppedMessage(dropRecord);
@@ -240,8 +241,8 @@ async function handleSenderApprovalResponse(payload: ResponsePayload): Promise<b
   if (!isAuthorized) {
     log.warn('Unknown-sender approval click rejected — unauthorized clicker', {
       approvalId: row.id,
-      clickerId,
-      expectedApprover: row.approver_user_id,
+      clickerId: redactUserId(clickerId),
+      expectedApprover: redactUserId(row.approver_user_id),
     });
     return true; // claim the response so it's not unclaimed-logged, but do nothing
   }
@@ -257,9 +258,9 @@ async function handleSenderApprovalResponse(payload: ResponsePayload): Promise<b
     });
     log.info('Unknown sender approved — member added', {
       approvalId: row.id,
-      senderIdentity: row.sender_identity,
+      senderIdentity: redactUserId(row.sender_identity),
       agentGroupId: row.agent_group_id,
-      approverId,
+      approverId: redactUserId(approverId),
     });
 
     // Clear the pending row BEFORE re-routing so the gate check on the
@@ -277,9 +278,9 @@ async function handleSenderApprovalResponse(payload: ResponsePayload): Promise<b
 
   log.info('Unknown sender denied', {
     approvalId: row.id,
-    senderIdentity: row.sender_identity,
+    senderIdentity: redactUserId(row.sender_identity),
     agentGroupId: row.agent_group_id,
-    approverId,
+    approverId: redactUserId(approverId),
   });
   deletePendingSenderApproval(row.id);
   return true;
@@ -321,8 +322,8 @@ async function handleChannelApprovalResponse(payload: ResponsePayload): Promise<
   if (!isAuthorized) {
     log.warn('Channel registration click rejected — unauthorized clicker', {
       messagingGroupId: row.messaging_group_id,
-      clickerId,
-      expectedApprover: row.approver_user_id,
+      clickerId: redactUserId(clickerId),
+      expectedApprover: redactUserId(row.approver_user_id),
     });
     return true;
   }
@@ -334,7 +335,7 @@ async function handleChannelApprovalResponse(payload: ResponsePayload): Promise<
     deletePendingChannelApproval(row.messaging_group_id);
     log.info('Channel registration denied', {
       messagingGroupId: row.messaging_group_id,
-      approverId,
+      approverId: redactUserId(approverId),
     });
     return true;
   }
@@ -354,7 +355,7 @@ async function handleChannelApprovalResponse(payload: ResponsePayload): Promise<
     if (!adapter) return true;
 
     const agentGroups = getAllAgentGroups();
-    const options = buildAgentSelectionOptions(agentGroups);
+    const options = buildAgentSelectionOptions(agentGroups, approverId);
     const title = '📋 Choose an agent';
     updatePendingChannelApprovalCard(row.messaging_group_id, title, JSON.stringify(options));
 
@@ -438,6 +439,14 @@ async function handleChannelApprovalResponse(payload: ResponsePayload): Promise<
       deletePendingChannelApproval(row.messaging_group_id);
       return true;
     }
+    if (!hasAdminPrivilege(approverId, targetAgentGroupId)) {
+      log.warn('Channel registration: target agent group rejected for unauthorized approver', {
+        messagingGroupId: row.messaging_group_id,
+        targetAgentGroupId,
+        approverId,
+      });
+      return true;
+    }
   } else {
     log.warn('Channel registration: unknown response value', {
       messagingGroupId: row.messaging_group_id,
@@ -481,7 +490,7 @@ async function handleChannelApprovalResponse(payload: ResponsePayload): Promise<
     agentGroupId: targetAgentGroupId,
     mgaId,
     engageMode,
-    approverId,
+    approverId: redactUserId(approverId),
   });
 
   const senderUserId = extractAndUpsertUser(event);
@@ -532,7 +541,7 @@ setMessageInterceptor(async (event: InboundEvent): Promise<boolean> => {
   }
 
   if (!text) {
-    log.warn('Channel registration: empty name reply, ignoring', { userId });
+    log.warn('Channel registration: empty name reply, ignoring', { userId: redactUserId(userId) });
     return true;
   }
 
@@ -581,7 +590,7 @@ setMessageInterceptor(async (event: InboundEvent): Promise<boolean> => {
     agentGroupId: ag.id,
     mgaId,
     engageMode,
-    approverId: userId,
+    approverId: redactUserId(userId),
   });
 
   const senderUserId = extractAndUpsertUser(originalEvent);

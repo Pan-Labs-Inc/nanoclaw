@@ -35,8 +35,10 @@ describe('scripts/q.ts', () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
+  const TSX = path.resolve(__dirname, '../node_modules/.bin/tsx');
+
   function run(sql: string): { stdout: string; stderr: string; status: number } {
-    const r = spawnSync('pnpm', ['exec', 'tsx', Q, dbPath, sql], {
+    const r = spawnSync(TSX, [Q, dbPath, sql], {
       encoding: 'utf-8',
       cwd: path.resolve(__dirname, '..'),
     });
@@ -96,7 +98,7 @@ describe('scripts/q.ts', () => {
   });
 
   it('exits 2 with usage when args are missing', () => {
-    const r = spawnSync('pnpm', ['exec', 'tsx', Q], {
+    const r = spawnSync(TSX, [Q], {
       encoding: 'utf-8',
       cwd: path.resolve(__dirname, '..'),
     });

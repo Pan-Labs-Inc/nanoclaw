@@ -14,6 +14,15 @@
 import fs from 'fs';
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 
+const { logMock } = vi.hoisted(() => ({
+  logMock: {
+    debug: vi.fn(),
+    error: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+  },
+}));
+
 import { initTestDb, closeDb, runMigrations } from '../../db/index.js';
 import { createAgentGroup } from '../../db/agent-groups.js';
 import { createMessagingGroup, createMessagingGroupAgent } from '../../db/messaging-groups.js';
@@ -27,6 +36,8 @@ vi.mock('../../container-runner.js', () => ({
   getActiveContainerCount: vi.fn().mockReturnValue(0),
   killContainer: vi.fn(),
 }));
+
+vi.mock('../../log.js', () => ({ log: logMock }));
 
 // Mock delivery adapter — record card deliveries for assertions.
 const deliverMock = vi.fn().mockResolvedValue('plat-msg-id');
@@ -127,6 +138,7 @@ beforeEach(async () => {
     .run('telegram:owner', 'telegram', 'mg-dm-owner', now());
 
   deliverMock.mockClear();
+  for (const fn of Object.values(logMock)) fn.mockClear();
 });
 
 afterEach(() => {
@@ -145,6 +157,24 @@ function stranger(text: string) {
       content: JSON.stringify({
         senderId: 'tg:stranger',
         senderName: 'Stranger',
+        text,
+      }),
+      timestamp: now(),
+    },
+  };
+}
+
+function smsStranger(text: string) {
+  return {
+    channelType: 'sms',
+    platformId: '+15551234567',
+    threadId: null,
+    message: {
+      id: `sms-stranger-${Math.random().toString(36).slice(2, 8)}`,
+      kind: 'chat' as const,
+      content: JSON.stringify({
+        senderId: '+15551234567',
+        senderName: '+15551234567',
         text,
       }),
       timestamp: now(),
@@ -173,6 +203,54 @@ describe('unknown-sender request_approval flow', () => {
     const { getDb } = await import('../../db/connection.js');
     const rows = getDb().prepare('SELECT * FROM pending_sender_approvals').all();
     expect(rows).toHaveLength(1);
+  });
+
+  it('redacts SMS sender identities in approval logs while preserving raw state', async () => {
+    createMessagingGroup({
+      id: 'mg-sms',
+      channel_type: 'sms',
+      platform_id: '+15551234567',
+      name: 'SMS',
+      is_group: 0,
+      unknown_sender_policy: 'request_approval',
+      created_at: now(),
+    });
+    createMessagingGroupAgent({
+      id: 'mga-sms',
+      messaging_group_id: 'mg-sms',
+      agent_group_id: 'ag-1',
+      engage_mode: 'pattern',
+      engage_pattern: '.',
+      sender_scope: 'all',
+      ignored_message_policy: 'drop',
+      session_mode: 'shared',
+      priority: 0,
+      created_at: now(),
+    });
+
+    const { routeInbound } = await import('../../router.js');
+    await routeInbound(smsStranger('hi'));
+    await new Promise((r) => setTimeout(r, 10));
+
+    const { getDb } = await import('../../db/connection.js');
+    const row = getDb().prepare('SELECT sender_identity FROM pending_sender_approvals').get() as
+      | { sender_identity: string }
+      | undefined;
+
+    expect(row?.sender_identity).toBe('sms:+15551234567');
+    expect(logMock.info).toHaveBeenCalledWith(
+      'MESSAGE DROPPED — unknown sender (approval requested)',
+      expect.objectContaining({
+        userId: 'sms:+15...4567',
+      }),
+    );
+    expect(logMock.info).toHaveBeenCalledWith(
+      'Unknown-sender approval card delivered',
+      expect.objectContaining({
+        senderIdentity: 'sms:+15...4567',
+      }),
+    );
+    expect(JSON.stringify(logMock.info.mock.calls)).not.toContain('+15551234567');
   });
 
   it('dedups a second message from the same stranger while pending', async () => {

@@ -289,6 +289,17 @@ export function markDeliveryFailed(db: Database.Database, messageOutId: string):
   ).run(messageOutId);
 }
 
+export function updateDeliveredStatusByPlatformMessageId(
+  db: Database.Database,
+  platformMessageId: string,
+  status: string,
+): number {
+  migrateDeliveredTable(db);
+  return db
+    .prepare("UPDATE delivered SET status = ?, delivered_at = datetime('now') WHERE platform_message_id = ?")
+    .run(status, platformMessageId).changes;
+}
+
 /** Ensure the delivered table has columns added after initial schema. */
 export function migrateDeliveredTable(db: Database.Database): void {
   const cols = new Set(

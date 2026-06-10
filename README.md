@@ -68,13 +68,13 @@ See [docs/v1-to-v2-changes.md](docs/v1-to-v2-changes.md) for what's different an
 
 **AI-native, hybrid by design.** The install and onboarding flow is an optimized scripted path, fast and deterministic. When a step needs judgment, whether a failed install, a guided decision, or a customization, control hands off to Claude Code seamlessly. Beyond setup there's no monitoring dashboard or debugging UI either: describe the problem in chat and Claude Code handles it.
 
-**Skills over features.** Trunk ships the registry and infrastructure, not specific channel adapters or alternative agent providers. Channels (Discord, Slack, Telegram, WhatsApp, …) live on a long-lived `channels` branch; alternative providers (OpenCode, Ollama) live on `providers`. You run `/add-telegram`, `/add-opencode`, etc. and the skill copies exactly the module(s) you need into your fork. No feature you didn't ask for.
+**Skills over features.** Trunk ships the registry and infrastructure, not specific channel adapters or alternative agent providers. Channels (SMS, Discord, Slack, Telegram, WhatsApp, ...) live on a long-lived `channels` branch; alternative providers (OpenCode, Ollama) live on `providers`. You run `/add-telegram`, `/add-sms`, `/add-opencode`, etc. and the skill copies exactly the module(s) you need into your fork. No feature you didn't ask for.
 
 **Best harness, best model.** NanoClaw natively uses Claude Code via Anthropic's official Claude Agent SDK, so you get the latest Claude models and Claude Code's full toolset, including the ability to modify and expand your own NanoClaw fork. Other providers are drop-in options: `/add-codex` for OpenAI's Codex (ChatGPT subscription or API key), `/add-opencode` for OpenRouter, Google, DeepSeek and more via OpenCode, and `/add-ollama-provider` for local open-weight models. Provider is configurable per agent group.
 
 ## What It Supports
 
-- **Multi-channel messaging** — WhatsApp, Telegram, Discord, Slack, Microsoft Teams, iMessage, Matrix, Google Chat, Webex, Linear, GitHub, WeChat, and email via Resend. Installed on demand with `/add-<channel>` skills. Run one or many at the same time.
+- **Multi-channel messaging** — SMS via Twilio, WhatsApp, Telegram, Discord, Slack, Microsoft Teams, iMessage, Matrix, Google Chat, Webex, Linear, GitHub, WeChat, and email via Resend. Installed on demand with `/add-<channel>` skills. Run one or many at the same time.
 - **Flexible isolation** — connect each channel to its own agent for full privacy, share one agent across many channels for unified memory with separate conversations, or fold multiple channels into a single shared session so one conversation spans many surfaces. Pick per channel via `/manage-channels`. See [docs/isolation-model.md](docs/isolation-model.md).
 - **Per-agent workspace** — each agent group has its own `CLAUDE.md`, its own memory, its own container, and only the mounts you allow. Nothing crosses the boundary unless you wire it to.
 - **Scheduled tasks** — recurring jobs that run Claude and can message you back
@@ -125,6 +125,7 @@ This keeps trunk as pure registry and infra, and every fork stays lean — users
 Skills we'd like to see:
 
 **Communication Channels**
+- `/add-sms` — Add SMS through Twilio
 - `/add-signal` — Add Signal as a channel
 
 ## Requirements
@@ -158,6 +159,24 @@ Key files:
 - `src/providers/` — host-side provider config (`claude` baked in; others via skills)
 - `container/agent-runner/` — Bun agent-runner: poll loop, MCP tools, provider abstraction
 - `groups/<folder>/` — per-agent-group filesystem (`CLAUDE.md`, skills, container config)
+
+## Admin MCP Token Rotation
+
+The admin MCP endpoint (`POST /webhook/admin-mcp`) is protected by a static bearer token (`NANOCLAW_ADMIN_MCP_TOKEN`). If a token is leaked or you rotate as routine policy:
+
+1. **Generate a new token:**
+   ```bash
+   openssl rand -hex 32
+   ```
+2. **Set both sides:** update `NANOCLAW_ADMIN_MCP_TOKEN` in `.env` on the NanoClaw host **and** update the token in any client (deployment script, CI secret, calling agent) at the same time.
+3. **Restart the host** to pick up the new token:
+   ```bash
+   systemctl --user restart nanoclaw   # Linux
+   launchctl kickstart -k gui/$(id -u)/com.nanoclaw  # macOS
+   ```
+4. **Revoke the old token** by confirming the old value is no longer in `.env` and that no client still holds it.
+
+To limit blast radius in case of a future leak, set `NANOCLAW_ADMIN_MCP_GROUP_PREFIXES` to a comma-separated list of allowed group-name prefixes (e.g. `sms-,prod-`). Group-targeting verbs will then reject any group whose name does not start with a listed prefix.
 
 ## FAQ
 

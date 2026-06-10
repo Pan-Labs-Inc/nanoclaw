@@ -48,6 +48,17 @@ import type { ChannelAdapter, ChannelSetup, ConversationInfo, InboundMessage, Ou
 
 const baileysLogger = pino({ level: 'silent' });
 
+type SignalRepositoryWithLidMapping = {
+  lidMapping?: {
+    getPNForLID?: (jid: string) => Promise<string | undefined>;
+  };
+};
+
+type WAMessageKeyWithAlt = WAMessageKey & {
+  remoteJidAlt?: string;
+  participantAlt?: string;
+};
+
 /**
  * Fetch the latest WhatsApp Web version. Baileys' built-in
  * fetchLatestWaWebVersion scrapes sw.js which is aggressively
@@ -258,7 +269,8 @@ registerChannelAdapter('whatsapp', {
 
       // 3. Query Baileys v7 LID mapping store
       try {
-        const pn = await sock.signalRepository.lidMapping.getPNForLID(jid);
+        const signalRepository = sock.signalRepository as unknown as SignalRepositoryWithLidMapping;
+        const pn = await signalRepository.lidMapping?.getPNForLID?.(jid);
         if (pn) {
           const phoneJid = `${pn.split('@')[0].split(':')[0]}@s.whatsapp.net`;
           setLidPhoneMapping(lidUser, phoneJid);
@@ -528,7 +540,7 @@ registerChannelAdapter('whatsapp', {
       sock.ev.on('creds.update', saveCreds);
 
       // LID ↔ phone mapping updates (v7 replaces chats.phoneNumberShare)
-      sock.ev.on('lid-mapping.update', ({ lid, pn }) => {
+      sock.ev.on('lid-mapping.update' as any, ({ lid, pn }: { lid?: string; pn?: string }) => {
         const lidUser = lid?.split('@')[0].split(':')[0];
         if (lidUser && pn) {
           const phoneJid = pn.includes('@') ? pn : `${pn}@s.whatsapp.net`;
@@ -543,11 +555,12 @@ registerChannelAdapter('whatsapp', {
             if (!msg.message) continue;
             const normalized = normalizeMessageContent(msg.message);
             if (!normalized) continue;
-            const rawJid = msg.key.remoteJid;
+            const key = msg.key as WAMessageKeyWithAlt;
+            const rawJid = key.remoteJid;
             if (!rawJid || rawJid === 'status@broadcast') continue;
 
             // Translate LID → phone JID using v7's alt JID from extractAddressingContext
-            const chatJid = await translateJid(rawJid, msg.key.remoteJidAlt);
+            const chatJid = await translateJid(rawJid, key.remoteJidAlt);
 
             const timestamp = new Date(Number(msg.messageTimestamp) * 1000).toISOString();
             const isGroup = chatJid.endsWith('@g.us');
@@ -574,10 +587,8 @@ registerChannelAdapter('whatsapp', {
             if (!content && attachments.length === 0) continue;
 
             // Resolve sender: in groups, participant may be LID — use participantAlt
-            const rawSender = msg.key.participant || msg.key.remoteJid || '';
-            const sender = rawSender.endsWith('@lid')
-              ? await translateJid(rawSender, msg.key.participantAlt)
-              : rawSender;
+            const rawSender = key.participant || key.remoteJid || '';
+            const sender = rawSender.endsWith('@lid') ? await translateJid(rawSender, key.participantAlt) : rawSender;
             const senderName = msg.pushName || sender.split('@')[0];
             const fromMe = msg.key.fromMe || false;
             // Filter bot's own messages to prevent echo loops.

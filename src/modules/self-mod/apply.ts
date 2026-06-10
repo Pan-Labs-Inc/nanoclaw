@@ -16,6 +16,7 @@ import { getContainerConfig, updateContainerConfigJson } from '../../db/containe
 import { getSession } from '../../db/sessions.js';
 import type { McpServerConfig } from '../../container-config.js';
 import { log } from '../../log.js';
+import { redactUserId } from '../../platform-redaction.js';
 import { writeSessionMessage } from '../../session-manager.js';
 import type { ApprovalHandler } from '../approvals/index.js';
 
@@ -52,7 +53,7 @@ export const applyInstallPackages: ApprovalHandler = async ({ session, payload, 
     ...((payload.apt as string[] | undefined) || []),
     ...((payload.npm as string[] | undefined) || []),
   ].join(', ');
-  log.info('Package install approved', { agentGroupId: session.agent_group_id, userId });
+  log.info('Package install approved', { agentGroupId: session.agent_group_id, userId: redactUserId(userId) });
   try {
     await buildAgentGroupImage(session.agent_group_id);
     writeSessionMessage(session.agent_group_id, session.id, {
@@ -122,5 +123,5 @@ export const applyAddMcpServer: ApprovalHandler = async ({ session, payload, use
     const s = getSession(session.id);
     if (s) wakeContainer(s);
   });
-  log.info('MCP server add approved', { agentGroupId: session.agent_group_id, userId });
+  log.info('MCP server add approved', { agentGroupId: session.agent_group_id, userId: redactUserId(userId) });
 };
