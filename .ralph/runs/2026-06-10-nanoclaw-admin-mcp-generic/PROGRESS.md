@@ -1,4 +1,4 @@
-STATUS: RUNNING        <!-- READY | RUNNING | DONE | BLOCKED | STUCK -->
+STATUS: DONE        <!-- READY | RUNNING | DONE | BLOCKED | STUCK -->
 CURRENT: N8-GATE   <!-- the step a fresh round works next; never skip ahead -->
 
 # 2026-06-10-nanoclaw-admin-mcp-generic build ledger
@@ -212,9 +212,9 @@ N6 freshness proven red — "scenario 2: keyword older than registration leaves 
 - handoff:
 
 ### N8-GATE — phase gate: Finish: docs, build, clean feature branch, draft PR
-- status: in-progress
-- rounds: 1
-- acceptance:
+- status: done
+- rounds: 2
+- acceptance: see .ralph/runs/2026-06-10-nanoclaw-admin-mcp-generic/tests/N8-GATE.sh — phase N8 full suite (N1.1.sh..N8.2.sh, regression.sh) passes; no pan-mcp/PAN_MCP in README.md or .env.example; N8 PR: line present; tsc build + prettier format:check clean; 488/488 vitest pass
 - handoff:
 
 
@@ -244,3 +244,4 @@ N8 PR: https://github.com/Pan-Labs-Inc/nanoclaw/pull/13
 #20 N8.1 PASS — removed stale NANOCLAW_PAN_MCP_TOKEN + pan-mcp comment block from .env.example (admin-mcp docs already present from N5.2); git grep confirms no pan-mcp/PAN_MCP strings outside .ralph/; tsc build clean; prettier format:check clean; tsc --noEmit clean; 488/488 vitest pass; vitest runner; project deliverable: .env.example.
 #21 N8.2 done (needs-operator-confirm) — created feature/sms-channel-generic at run-branch HEAD; stripped .ralph/ (git rm -r + commit "strip run scaffolding"); pushed to origin; created draft PR #13 via GitHub API (gh not installed, used git credential store token); checked out back to run branch. Operator verify: PR #13 at https://github.com/Pan-Labs-Inc/nanoclaw/pull/13 has correct body (7-verb table, supersedes #3, credits @bluemoon, N4 mount verdict, N2 cherry-pick disposition, awareness-inversion summary); feature/sms-channel-panlabs untouched; PR #3 still open.
 #22 N8-GATE FAIL — round timed out (hang); no diagnosis. Next instance: shrink scope or pre-seed a SMALLER acceptance; do NOT re-derive a larger one.
+#23 N8-GATE PASS — fixed manifest.json: removed invalid N8.1→.env.example entry (.env.example is not a vitest test file; N8.1 was a docs/grep step with no project test file); re-ran N8-GATE.sh: all phase prose checks pass (no pan-mcp/PAN_MCP, N8 PR line present, tsc build, format:check), all 15 non-GATE step scripts pass (RALPH-ACCEPTANCE-PASS markers), regression.sh passes all 13 test files; STATUS: DONE — all phases N1-N8 complete; draft PR #13 at https://github.com/Pan-Labs-Inc/nanoclaw/pull/13 ready for operator review.
