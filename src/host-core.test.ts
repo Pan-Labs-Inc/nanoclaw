@@ -8,6 +8,15 @@ import fs from 'fs';
 import path from 'path';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
+const { logMock } = vi.hoisted(() => ({
+  logMock: {
+    debug: vi.fn(),
+    error: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+  },
+}));
+
 import {
   initTestDb,
   closeDb,
@@ -30,6 +39,8 @@ import {
 } from './session-manager.js';
 import { getSession, findSession } from './db/sessions.js';
 import type { InboundEvent } from './channels/adapter.js';
+
+vi.mock('./log.js', () => ({ log: logMock }));
 
 // Mock container runner to prevent actual Docker spawning
 vi.mock('./container-runner.js', () => ({
@@ -58,6 +69,7 @@ beforeEach(() => {
 
   const db = initTestDb();
   runMigrations(db);
+  for (const fn of Object.values(logMock)) fn.mockClear();
 });
 
 afterEach(() => {
@@ -464,6 +476,41 @@ describe('router', () => {
     expect(getMessagingGroupByPlatform('slack', 'C-MENTIONED')).toBeDefined();
   });
 
+  it('redacts SMS platform IDs in generic routing logs', async () => {
+    const { routeInbound } = await import('./router.js');
+    const { getMessagingGroupByPlatform } = await import('./db/messaging-groups.js');
+
+    await routeInbound({
+      channelType: 'sms',
+      platformId: '+15551234567',
+      threadId: null,
+      message: {
+        id: 'msg-sms-mentioned',
+        kind: 'chat',
+        content: JSON.stringify({ sender: '+15551234567', text: 'hi' }),
+        timestamp: now(),
+        isMention: true,
+      },
+    });
+
+    expect(getMessagingGroupByPlatform('sms', '+15551234567')).toBeDefined();
+    expect(logMock.info).toHaveBeenCalledWith(
+      'Auto-created messaging group',
+      expect.objectContaining({
+        channelType: 'sms',
+        platformId: '+15...4567',
+      }),
+    );
+    expect(logMock.warn).toHaveBeenCalledWith(
+      expect.stringContaining('MESSAGE DROPPED'),
+      expect.objectContaining({
+        channelType: 'sms',
+        platformId: '+15...4567',
+      }),
+    );
+    expect(JSON.stringify([...logMock.info.mock.calls, ...logMock.warn.mock.calls])).not.toContain('+15551234567');
+  });
+
   it('should route multiple messages to the same session', async () => {
     const { routeInbound } = await import('./router.js');
 
@@ -805,6 +852,51 @@ describe('writeSessionRouting', () => {
     expect(row!.channel_type).toBe('discord');
     expect(row!.platform_id).toBe('chan-123');
     expect(row!.thread_id).toBe('thread-77');
+  });
+
+  it('redacts SMS platform ID in session routing logs while preserving raw routing data', () => {
+    createAgentGroup({
+      id: 'ag-1',
+      name: 'Agent',
+      folder: 'agent',
+      agent_provider: null,
+      created_at: now(),
+    });
+    createMessagingGroup({
+      id: 'mg-sms',
+      channel_type: 'sms',
+      platform_id: '+15551234567',
+      name: 'SMS',
+      is_group: 0,
+      unknown_sender_policy: 'public',
+      created_at: now(),
+    });
+
+    const { session } = resolveSession('ag-1', 'mg-sms', null, 'shared');
+    writeSessionRouting('ag-1', session.id);
+
+    const db = new Database(inboundDbPath('ag-1', session.id));
+    const row = db.prepare('SELECT channel_type, platform_id, thread_id FROM session_routing WHERE id = 1').get() as
+      | {
+          channel_type: string | null;
+          platform_id: string | null;
+          thread_id: string | null;
+        }
+      | undefined;
+    db.close();
+
+    expect(row).toBeDefined();
+    expect(row!.channel_type).toBe('sms');
+    expect(row!.platform_id).toBe('+15551234567');
+    expect(row!.thread_id).toBeNull();
+    expect(logMock.debug).toHaveBeenCalledWith(
+      'Session routing written',
+      expect.objectContaining({
+        channelType: 'sms',
+        platformId: '+15...4567',
+      }),
+    );
+    expect(JSON.stringify(logMock.debug.mock.calls)).not.toContain('+15551234567');
   });
 });
 

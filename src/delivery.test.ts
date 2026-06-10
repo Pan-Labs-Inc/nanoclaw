@@ -12,6 +12,17 @@ import Database from 'better-sqlite3';
 import fs from 'fs';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
+const { logMock } = vi.hoisted(() => ({
+  logMock: {
+    debug: vi.fn(),
+    error: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+  },
+}));
+
+vi.mock('./log.js', () => ({ log: logMock }));
+
 vi.mock('./container-runner.js', () => ({
   wakeContainer: vi.fn().mockResolvedValue(undefined),
   isContainerRunning: vi.fn().mockReturnValue(false),
@@ -70,11 +81,21 @@ function insertOutbound(agentGroupId: string, sessionId: string, msgId: string):
   db.close();
 }
 
+function insertSmsOutbound(agentGroupId: string, sessionId: string, msgId: string, phone: string): void {
+  const db = new Database(outboundDbPath(agentGroupId, sessionId));
+  db.prepare(
+    `INSERT INTO messages_out (id, timestamp, kind, platform_id, channel_type, content)
+     VALUES (?, datetime('now'), 'chat', ?, 'sms', ?)`,
+  ).run(msgId, phone, JSON.stringify({ text: 'hello' }));
+  db.close();
+}
+
 beforeEach(() => {
   if (fs.existsSync(TEST_DIR)) fs.rmSync(TEST_DIR, { recursive: true });
   fs.mkdirSync(TEST_DIR, { recursive: true });
   const db = initTestDb();
   runMigrations(db);
+  for (const fn of Object.values(logMock)) fn.mockClear();
 });
 
 afterEach(() => {
@@ -217,6 +238,44 @@ describe('deliverSessionMessages — retry and permanent failure', () => {
     // Attempt 3 — not called, message already delivered
     await deliverSessionMessages(session);
     expect(callCount).toBe(2);
+  });
+
+  it('redacts SMS phone numbers in generic delivery logs', async () => {
+    createAgentGroup({
+      id: 'ag-1',
+      name: 'Test Agent',
+      folder: 'test-agent',
+      agent_provider: null,
+      created_at: now(),
+    });
+    createMessagingGroup({
+      id: 'mg-sms',
+      channel_type: 'sms',
+      platform_id: '+15551234567',
+      name: 'SMS Chat',
+      is_group: 0,
+      unknown_sender_policy: 'public',
+      created_at: now(),
+    });
+    const { session } = resolveSession('ag-1', 'mg-sms', null, 'shared');
+    insertSmsOutbound('ag-1', session.id, 'out-sms', '+15551234567');
+
+    setDeliveryAdapter({
+      async deliver() {
+        return 'SM123';
+      },
+    });
+
+    await deliverSessionMessages(session);
+
+    expect(logMock.info).toHaveBeenCalledWith(
+      'Message delivered',
+      expect.objectContaining({
+        channelType: 'sms',
+        platformId: '+15...4567',
+      }),
+    );
+    expect(JSON.stringify(logMock.info.mock.calls)).not.toContain('+15551234567');
   });
 });
 

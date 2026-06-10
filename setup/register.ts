@@ -37,6 +37,8 @@ interface RegisterArgs {
   channel: string;
   /** Whether messages require the trigger pattern to activate */
   requiresTrigger: boolean;
+  /** Explicit conversation shape. Defaults to group for backwards compatibility. */
+  isGroup?: boolean;
   /** Display name for the assistant */
   assistantName: string;
   /** Session mode: 'shared' (one session per channel) or 'per-thread' */
@@ -74,6 +76,12 @@ function parseArgs(args: string[]): RegisterArgs {
         break;
       case '--no-trigger-required':
         result.requiresTrigger = false;
+        break;
+      case '--dm':
+        result.isGroup = false;
+        break;
+      case '--group':
+        result.isGroup = true;
         break;
       case '--assistant-name':
         result.assistantName = args[++i] || 'Andy';
@@ -146,12 +154,13 @@ export async function run(args: string[]): Promise<void> {
   let messagingGroup = getMessagingGroupByPlatform(parsed.channel, parsed.platformId);
   if (!messagingGroup) {
     const mgId = generateId('mg');
+    const isGroup = parsed.isGroup ?? true;
     createMessagingGroup({
       id: mgId,
       channel_type: parsed.channel,
       platform_id: parsed.platformId,
       name: parsed.name,
-      is_group: 1,
+      is_group: isGroup ? 1 : 0,
       unknown_sender_policy: 'strict',
       created_at: new Date().toISOString(),
     });

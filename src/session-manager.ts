@@ -36,6 +36,7 @@ import {
   migrateMessagesInTable,
 } from './db/session-db.js';
 import { log } from './log.js';
+import { redactPlatformId } from './platform-redaction.js';
 import type { Session } from './types.js';
 
 function isPathInside(parent: string, child: string): boolean {
@@ -180,7 +181,12 @@ export function writeSessionRouting(agentGroupId: string, sessionId: string): vo
   } finally {
     db.close();
   }
-  log.debug('Session routing written', { sessionId, channelType, platformId, threadId: session.thread_id });
+  log.debug('Session routing written', {
+    sessionId,
+    channelType,
+    platformId: redactPlatformId(channelType, platformId),
+    threadId: session.thread_id,
+  });
 }
 
 /**

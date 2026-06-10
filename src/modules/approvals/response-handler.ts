@@ -16,6 +16,7 @@ import { wakeContainer } from '../../container-runner.js';
 import { deletePendingApproval, getPendingApproval, getSession } from '../../db/sessions.js';
 import type { ResponsePayload } from '../../response-registry.js';
 import { log } from '../../log.js';
+import { redactUserId } from '../../platform-redaction.js';
 import { writeSessionMessage } from '../../session-manager.js';
 import type { PendingApproval } from '../../types.js';
 import { ONECLI_ACTION, resolveOneCLIApproval } from './onecli-approvals.js';
@@ -71,7 +72,11 @@ async function handleRegisteredApproval(
 
   if (selectedOption !== 'approve') {
     notify(`Your ${approval.action} request was rejected by admin.`);
-    log.info('Approval rejected', { approvalId: approval.approval_id, action: approval.action, userId });
+    log.info('Approval rejected', {
+      approvalId: approval.approval_id,
+      action: approval.action,
+      userId: redactUserId(userId),
+    });
     deletePendingApproval(approval.approval_id);
     await wakeContainer(session);
     return;
@@ -93,7 +98,11 @@ async function handleRegisteredApproval(
   const payload = JSON.parse(approval.payload);
   try {
     await handler({ session, payload, userId, notify });
-    log.info('Approval handled', { approvalId: approval.approval_id, action: approval.action, userId });
+    log.info('Approval handled', {
+      approvalId: approval.approval_id,
+      action: approval.action,
+      userId: redactUserId(userId),
+    });
   } catch (err) {
     log.error('Approval handler threw', { approvalId: approval.approval_id, action: approval.action, err });
     notify(

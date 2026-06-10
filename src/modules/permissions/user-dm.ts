@@ -35,6 +35,7 @@
 import { getChannelAdapter } from '../../channels/channel-registry.js';
 import { getMessagingGroup, getMessagingGroupByPlatform, createMessagingGroup } from '../../db/messaging-groups.js';
 import { log } from '../../log.js';
+import { redactUserId } from '../../platform-redaction.js';
 import type { MessagingGroup, User } from '../../types.js';
 import { getUser } from './db/users.js';
 import { getUserDm, upsertUserDm } from './db/user-dms.js';
@@ -52,13 +53,13 @@ import { getUserDm, upsertUserDm } from './db/user-dms.js';
 export async function ensureUserDm(userId: string): Promise<MessagingGroup | null> {
   const user = getUser(userId);
   if (!user) {
-    log.warn('ensureUserDm: user not found', { userId });
+    log.warn('ensureUserDm: user not found', { userId: redactUserId(userId) });
     return null;
   }
 
   const { channelType, handle } = parseUserId(user);
   if (!channelType || !handle) {
-    log.warn('ensureUserDm: user id not namespaced', { userId });
+    log.warn('ensureUserDm: user id not namespaced', { userId: redactUserId(userId) });
     return null;
   }
 
@@ -69,7 +70,7 @@ export async function ensureUserDm(userId: string): Promise<MessagingGroup | nul
     if (mg) return mg;
     // Row points to a deleted messaging_group — fall through and re-resolve.
     log.warn('ensureUserDm: cached row references missing messaging_group, re-resolving', {
-      userId,
+      userId: redactUserId(userId),
       messagingGroupId: cached.messaging_group_id,
     });
   }
@@ -95,7 +96,7 @@ export async function ensureUserDm(userId: string): Promise<MessagingGroup | nul
     };
     createMessagingGroup(mg);
     log.info('ensureUserDm: created DM messaging_group', {
-      userId,
+      userId: redactUserId(userId),
       channelType,
       messagingGroupId: mgId,
     });

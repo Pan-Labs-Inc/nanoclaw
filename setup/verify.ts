@@ -16,16 +16,16 @@ import { readEnvFile } from '../src/env.js';
 import { log } from '../src/log.js';
 import { getLaunchdLabel, getSystemdUnit } from '../src/install-slug.js';
 import {
-  getPlatform,
   getServiceManager,
-  hasSystemd,
   isRoot,
 } from './platform.js';
 import { emitStatus } from './status.js';
 
+const TWILIO_MESSAGING_SERVICE_SID_RE = /^MG[0-9a-fA-F]{32}$/;
+const E164_PHONE_RE = /^\+[1-9]\d{7,14}$/;
+
 export async function run(_args: string[]): Promise<void> {
   const projectRoot = process.cwd();
-  const platform = getPlatform();
   const homeDir = os.homedir();
 
   log.info('Starting verification');
@@ -160,30 +160,22 @@ export async function run(_args: string[]): Promise<void> {
     'RESEND_API_KEY',
     'WHATSAPP_ACCESS_TOKEN',
     'IMESSAGE_ENABLED',
+    'TWILIO_ACCOUNT_SID',
+    'TWILIO_AUTH_TOKEN',
+    'TWILIO_PHONE_NUMBER',
+    'TWILIO_FROM_NUMBER',
+    'TWILIO_MESSAGING_SERVICE_SID',
+    'TWILIO_SMS_WEBHOOK_URL',
+    'TWILIO_SMS_STATUS_CALLBACK_URL',
+    'TWILIO_STATUS_CALLBACK_URL',
+    'NANOCLAW_SMS_ALLOW_PHONE_SENDER',
   ]);
 
-  const has = (key: string) => !!(process.env[key] || envVars[key]);
-  const channelAuth: Record<string, string> = {};
-
-  // WhatsApp Baileys: check for auth credentials on disk
+  const getValue = (key: string) => process.env[key] || envVars[key] || '';
+  const has = (key: string) => !!getValue(key);
   const authDir = path.join(projectRoot, 'store', 'auth');
-  if (fs.existsSync(authDir) && fs.readdirSync(authDir).length > 0) {
-    channelAuth.whatsapp = 'authenticated';
-  }
-
-  // Token-based channels
-  if (has('DISCORD_BOT_TOKEN')) channelAuth.discord = 'configured';
-  if (has('TELEGRAM_BOT_TOKEN')) channelAuth.telegram = 'configured';
-  if (has('SLACK_BOT_TOKEN') && has('SLACK_APP_TOKEN')) channelAuth.slack = 'configured';
-  if (has('GITHUB_TOKEN')) channelAuth.github = 'configured';
-  if (has('LINEAR_API_KEY')) channelAuth.linear = 'configured';
-  if (has('GCHAT_CREDENTIALS')) channelAuth.gchat = 'configured';
-  if (has('TEAMS_APP_ID') && has('TEAMS_APP_PASSWORD')) channelAuth.teams = 'configured';
-  if (has('WEBEX_BOT_TOKEN')) channelAuth.webex = 'configured';
-  if (has('MATRIX_ACCESS_TOKEN')) channelAuth.matrix = 'configured';
-  if (has('RESEND_API_KEY')) channelAuth.resend = 'configured';
-  if (has('WHATSAPP_ACCESS_TOKEN')) channelAuth['whatsapp-cloud'] = 'configured';
-  if (has('IMESSAGE_ENABLED')) channelAuth.imessage = 'configured';
+  const whatsappAuthenticated = fs.existsSync(authDir) && fs.readdirSync(authDir).length > 0;
+  const channelAuth = detectChannelAuth(has, { whatsappAuthenticated, getValue });
 
   const configuredChannels = Object.keys(channelAuth);
 
@@ -252,6 +244,79 @@ export function determineVerifyStatus(input: {
     input.registeredGroups > 0
     ? 'success'
     : 'failed';
+}
+
+export function detectChannelAuth(
+  has: (key: string) => boolean,
+  {
+    whatsappAuthenticated = false,
+    getValue = () => '',
+  }: { whatsappAuthenticated?: boolean; getValue?: (key: string) => string } = {},
+): Record<string, string> {
+  const channelAuth: Record<string, string> = {};
+
+  if (whatsappAuthenticated) channelAuth.whatsapp = 'authenticated';
+
+  if (has('DISCORD_BOT_TOKEN')) channelAuth.discord = 'configured';
+  if (has('TELEGRAM_BOT_TOKEN')) channelAuth.telegram = 'configured';
+  if (has('SLACK_BOT_TOKEN') && has('SLACK_APP_TOKEN')) channelAuth.slack = 'configured';
+  if (has('GITHUB_TOKEN')) channelAuth.github = 'configured';
+  if (has('LINEAR_API_KEY')) channelAuth.linear = 'configured';
+  if (has('GCHAT_CREDENTIALS')) channelAuth.gchat = 'configured';
+  if (has('TEAMS_APP_ID') && has('TEAMS_APP_PASSWORD')) channelAuth.teams = 'configured';
+  if (has('WEBEX_BOT_TOKEN')) channelAuth.webex = 'configured';
+  if (has('MATRIX_ACCESS_TOKEN')) channelAuth.matrix = 'configured';
+  if (has('RESEND_API_KEY')) channelAuth.resend = 'configured';
+  if (has('WHATSAPP_ACCESS_TOKEN')) channelAuth['whatsapp-cloud'] = 'configured';
+  if (has('IMESSAGE_ENABLED')) channelAuth.imessage = 'configured';
+  if (
+    has('TWILIO_ACCOUNT_SID') &&
+    has('TWILIO_AUTH_TOKEN') &&
+    (has('TWILIO_PHONE_NUMBER') || has('TWILIO_FROM_NUMBER') || has('TWILIO_MESSAGING_SERVICE_SID'))
+  ) {
+    const messagingServiceSid = getValue('TWILIO_MESSAGING_SERVICE_SID');
+    const phoneSender = getValue('TWILIO_PHONE_NUMBER') || getValue('TWILIO_FROM_NUMBER');
+    const webhookUrl = getValue('TWILIO_SMS_WEBHOOK_URL');
+    const statusCallbackUrl = getValue('TWILIO_SMS_STATUS_CALLBACK_URL') || getValue('TWILIO_STATUS_CALLBACK_URL');
+    if (!isHttpUrl(webhookUrl)) {
+      channelAuth.sms = 'invalid:webhook-url';
+      return channelAuth;
+    }
+    if (has('TWILIO_MESSAGING_SERVICE_SID')) {
+      if (!isHttpUrl(statusCallbackUrl)) {
+        channelAuth.sms = 'invalid:status-callback-url';
+        return channelAuth;
+      }
+      channelAuth.sms =
+        !messagingServiceSid || TWILIO_MESSAGING_SERVICE_SID_RE.test(messagingServiceSid)
+          ? 'configured:messaging-service'
+          : 'invalid:messaging-service';
+    } else {
+      if (!phoneSender || !E164_PHONE_RE.test(phoneSender)) {
+        channelAuth.sms = 'invalid:phone-dev';
+      } else if (!isTrue(getValue('NANOCLAW_SMS_ALLOW_PHONE_SENDER'))) {
+        channelAuth.sms = 'invalid:phone-dev-flag';
+      } else {
+        channelAuth.sms = 'configured:phone-dev';
+      }
+    }
+  }
+
+  return channelAuth;
+}
+
+function isTrue(value: string): boolean {
+  return ['1', 'true', 'yes', 'on'].includes(value.trim().toLowerCase());
+}
+
+function isHttpUrl(value: string): boolean {
+  if (!value) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
 }
 
 /**
