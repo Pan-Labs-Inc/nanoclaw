@@ -1,5 +1,5 @@
 STATUS: READY        <!-- READY | RUNNING | DONE | BLOCKED | STUCK -->
-CURRENT: N5-GATE   <!-- the step a fresh round works next; never skip ahead -->
+CURRENT: N6.1   <!-- the step a fresh round works next; never skip ahead -->
 
 # 2026-06-10-nanoclaw-admin-mcp-generic build ledger
 
@@ -157,9 +157,9 @@ operator configs, and any OTHER run's dir. Targeted add only.
 - handoff:
 
 ### N5-GATE — phase gate: Endpoint hardening: audit log, prefix scoping, rotation docs
-- status: pending
+- status: done
 - rounds: 0
-- acceptance:
+- acceptance: see .ralph/runs/2026-06-10-nanoclaw-admin-mcp-generic/tests/N5-GATE.sh — phase N5 full suite (N1.1.sh, N2.1.sh, N3.1.sh, N3.2.sh, N4.1.sh, N4.2.sh, N5.1.sh, N5.2.sh, regression.sh) passes; audit log wired, redactPlatformId present, prefix scoping wired, both env vars in .env.example, README rotation docs present, N5 redaction proven red; 21/21 admin-mcp tests, 471/471 full suite pass, tsc clean
 - handoff:
 
 ### N6.1 — Control-event timestamps + dm_status enrichment
@@ -231,3 +231,4 @@ operator configs, and any OTHER run's dir. Targeted add only.
 #10 N4-GATE PASS — ran N1.1.sh, N2.1.sh, N3.1.sh, N3.2.sh, N4.1.sh, N4.2.sh, regression.sh (skipping *-GATE.sh to prevent cascade recursion); all 465 vitest pass; verdict line present; reader-coupled assert (materializeContainerJson) present in admin-mcp.test.ts; wrote N4-GATE.sh; phase N4 prose acceptance verified.
 #11 N5.1 PASS — added log + redactPlatformId imports to admin-mcp.ts; added auditTarget() helper (uses redactPlatformId for dm_register/dm_status, groupName for group-targeting tools); wrapped tools/call handler with try/catch logging {tool, target, outcome:'ok'|'error: <msg>'} via log.info; added 3 audit tests (success line emitted, error line emitted, E.164 redacted in output); proved redaction test red by temporarily bypassing redactPlatformId (test "redacts E.164 phone numbers in audit log output" fails with raw +15551234567 in output); restored; 18/18 admin-mcp tests pass; tsc clean; vitest runner; project test file: src/admin-mcp.test.ts.
 #12 N5.2 PASS — added assertGroupPrefixAllowed() (parses NANOCLAW_ADMIN_MCP_GROUP_PREFIXES, gates group_put/file_get/file_put/mount_set/dm_register); createAdminMcpHandler accepts groupPrefixes param for test injection; 3 new tests (out-of-prefix rejected, in-prefix allowed, empty=unrestricted); .env.example documents NANOCLAW_ADMIN_MCP_TOKEN + NANOCLAW_ADMIN_MCP_GROUP_PREFIXES; README gains Admin MCP Token Rotation section (generate/set-both-sides/restart/revoke); 21/21 admin-mcp tests pass; 471/471 full suite pass; tsc clean; vitest runner; project test file: src/admin-mcp.test.ts.
+#13 N5-GATE PASS — ran N1.1.sh, N2.1.sh, N3.1.sh, N3.2.sh, N4.1.sh, N4.2.sh, N5.1.sh, N5.2.sh, regression.sh (skipping *-GATE.sh to prevent cascade recursion); all 471 vitest pass; audit log + redactPlatformId + prefix scoping all verified; both env vars in .env.example; README rotation docs present; N5 redaction proven red in PROGRESS.md; phase N5 prose acceptance verified; wrote N5-GATE.sh; vitest runner.
