@@ -331,6 +331,73 @@ describe('Admin MCP endpoint', () => {
     });
   });
 
+  describe('audit logging', () => {
+    it('emits an audit line on successful tool call', async () => {
+      const writes: string[] = [];
+      const spy = vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => {
+        writes.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk as Uint8Array).toString());
+        return true;
+      });
+      try {
+        const handler = createAdminMcpHandler({ token: TOKEN });
+        await callTool(handler, 'group_put', {
+          groupName: 'auditgroup',
+          files: [],
+          force: false,
+        });
+      } finally {
+        spy.mockRestore();
+      }
+      const output = writes.join('');
+      expect(output).toContain('admin-mcp audit');
+      expect(output).toContain('"ok"');
+    });
+
+    it('emits an audit line on failed tool call', async () => {
+      const writes: string[] = [];
+      const spy = vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => {
+        writes.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk as Uint8Array).toString());
+        return true;
+      });
+      try {
+        const handler = createAdminMcpHandler({ token: TOKEN });
+        fs.mkdirSync(path.join(`${TEST_DIR}/groups`, 'auditfailgroup'), { recursive: true });
+        await callTool(handler, 'group_put', {
+          groupName: 'auditfailgroup',
+          files: [],
+          force: false,
+        });
+      } finally {
+        spy.mockRestore();
+      }
+      const output = writes.join('');
+      expect(output).toContain('admin-mcp audit');
+      expect(output).toContain('error:');
+    });
+
+    it('redacts E.164 phone numbers in audit log output', async () => {
+      const writes: string[] = [];
+      const spy = vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => {
+        writes.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk as Uint8Array).toString());
+        return true;
+      });
+      try {
+        const handler = createAdminMcpHandler({ token: TOKEN });
+        await callTool(handler, 'dm_register', {
+          channel: 'sms',
+          address: '+15551234567',
+          groupName: 'auditredact',
+          require_opt_in: false,
+        });
+      } finally {
+        spy.mockRestore();
+      }
+      const output = writes.join('');
+      expect(output).not.toContain('+15551234567');
+      expect(output).toContain('+15...4567');
+    });
+  });
+
   describe('dm_status', () => {
     it('returns registered:true and activationState after dm_register', async () => {
       const handler = createAdminMcpHandler({ token: TOKEN });

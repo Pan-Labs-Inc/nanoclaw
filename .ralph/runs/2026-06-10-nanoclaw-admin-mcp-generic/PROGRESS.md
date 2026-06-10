@@ -1,5 +1,5 @@
 STATUS: READY        <!-- READY | RUNNING | DONE | BLOCKED | STUCK -->
-CURRENT: N5.1   <!-- the step a fresh round works next; never skip ahead -->
+CURRENT: N5.2   <!-- the step a fresh round works next; never skip ahead -->
 
 # 2026-06-10-nanoclaw-admin-mcp-generic build ledger
 
@@ -144,10 +144,11 @@ operator configs, and any OTHER run's dir. Targeted add only.
 - handoff:
 
 ### N5.1 — Audit logging with platform-id redaction
-- status: pending
+- status: done
 - rounds: 0
-- acceptance:
+- acceptance: see .ralph/runs/2026-06-10-nanoclaw-admin-mcp-generic/tests/N5.1.sh → src/admin-mcp.test.ts — log import + redactPlatformId import + 'admin-mcp audit' call in admin-mcp.ts; 3 new audit tests (success/failure/redaction); N5 redaction proven red; tsc clean; 18/18 admin-mcp tests pass
 - handoff:
+- N5 redaction proven red — "redacts E.164 phone numbers in audit log output": expect(output).not.toContain('+15551234567') — received string containing "+15551234567" (raw phone present when redactPlatformId bypassed)
 
 ### N5.2 — Group-prefix scoping + token rotation docs
 - status: pending
@@ -228,3 +229,4 @@ operator configs, and any OTHER run's dir. Targeted add only.
 #8 N4.1 PASS — verdict: container_configs.additional_mounts (DB); reader materializeContainerJson() in src/container-config.ts; group_mount_set now calls updateContainerConfigJson() instead of writing container.json directly; test updated to verify DB row; auto-creates agent group in DB if needed (mirrors dm_register pattern); tsc clean; 464/464 vitest pass. Project test file: src/admin-mcp.test.ts.
 #9 N4.2 PASS — added reader-coupling test in group_mount_set describe block: calls group_put x2 + group_mount_set, then calls materializeContainerJson(agentGroup.id) directly (real reader, not reimplementation), asserts additionalMounts[].containerPath + readonly + hostPath contains sourceGroup; imported materializeContainerJson from ./container-config.js; 15/15 admin-mcp tests, 465/465 full suite, tsc clean. Project test file: src/admin-mcp.test.ts.
 #10 N4-GATE PASS — ran N1.1.sh, N2.1.sh, N3.1.sh, N3.2.sh, N4.1.sh, N4.2.sh, regression.sh (skipping *-GATE.sh to prevent cascade recursion); all 465 vitest pass; verdict line present; reader-coupled assert (materializeContainerJson) present in admin-mcp.test.ts; wrote N4-GATE.sh; phase N4 prose acceptance verified.
+#11 N5.1 PASS — added log + redactPlatformId imports to admin-mcp.ts; added auditTarget() helper (uses redactPlatformId for dm_register/dm_status, groupName for group-targeting tools); wrapped tools/call handler with try/catch logging {tool, target, outcome:'ok'|'error: <msg>'} via log.info; added 3 audit tests (success line emitted, error line emitted, E.164 redacted in output); proved redaction test red by temporarily bypassing redactPlatformId (test "redacts E.164 phone numbers in audit log output" fails with raw +15551234567 in output); restored; 18/18 admin-mcp tests pass; tsc clean; vitest runner; project test file: src/admin-mcp.test.ts.

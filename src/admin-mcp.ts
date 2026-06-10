@@ -21,7 +21,9 @@ import {
 } from './db/messaging-groups.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { initGroupFilesystem } from './group-init.js';
+import { log } from './log.js';
 import { namespacedPlatformId } from './platform-id.js';
+import { redactPlatformId } from './platform-redaction.js';
 import { resolveSession, writeSessionMessage } from './session-manager.js';
 import { registerWebhookHandler } from './webhook-server.js';
 
@@ -105,7 +107,16 @@ export function createAdminMcpHandler({ token = process.env.NANOCLAW_ADMIN_MCP_T
         const args = objectArg(params, 'arguments', {});
         const handler = toolHandlers[name];
         if (!handler) throw new Error(`Unknown admin MCP tool: ${name}`);
-        const payload = await handler(args);
+        const target = auditTarget(name, args);
+        let payload: unknown;
+        try {
+          payload = await handler(args);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          log.info('admin-mcp audit', { tool: name, target, outcome: `error: ${msg}` });
+          throw err;
+        }
+        log.info('admin-mcp audit', { tool: name, target, outcome: 'ok' });
         return jsonRpc(rpc.id, {
           content: [{ type: 'text', text: JSON.stringify(payload) }],
           structuredContent: payload,
@@ -197,7 +208,13 @@ function groupMountSetTool(args: Record<string, unknown>) {
 
   let agentGroup = getAgentGroupByFolder(groupName);
   if (!agentGroup) {
-    createAgentGroup({ id: generateId('ag'), name: groupName, folder: groupName, agent_provider: null, created_at: new Date().toISOString() });
+    createAgentGroup({
+      id: generateId('ag'),
+      name: groupName,
+      folder: groupName,
+      agent_provider: null,
+      created_at: new Date().toISOString(),
+    });
     agentGroup = getAgentGroupByFolder(groupName);
     if (!agentGroup) throw new Error(`Could not create agent group for '${groupName}'`);
   }
@@ -464,6 +481,16 @@ function safeRelativePath(relPath: string): string {
 
 function generateId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function auditTarget(name: string, args: Record<string, unknown>): string {
+  if (name === 'dm_register' || name === 'dm_status') {
+    const channel = typeof args.channel === 'string' ? args.channel : '';
+    const address = typeof args.address === 'string' ? args.address : '';
+    return `${channel}:${redactPlatformId(channel, address) ?? address}`;
+  }
+  if (typeof args.groupName === 'string' && args.groupName) return args.groupName;
+  return name;
 }
 
 if (process.env.NANOCLAW_ADMIN_MCP_TOKEN) {
