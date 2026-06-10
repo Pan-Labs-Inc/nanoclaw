@@ -1,5 +1,5 @@
 STATUS: RUNNING        <!-- READY | RUNNING | DONE | BLOCKED | STUCK -->
-CURRENT: N8.1   <!-- the step a fresh round works next; never skip ahead -->
+CURRENT: N8.2   <!-- the step a fresh round works next; never skip ahead -->
 
 # 2026-06-10-nanoclaw-admin-mcp-generic build ledger
 
@@ -200,9 +200,9 @@ N6 freshness proven red — "scenario 2: keyword older than registration leaves 
 - handoff:
 
 ### N8.1 — Docs + rename sweep + release-grade verification
-- status: pending
+- status: done
 - rounds: 0
-- acceptance:
+- acceptance: see .ralph/runs/2026-06-10-nanoclaw-admin-mcp-generic/tests/N8.1.sh — no pan-mcp/PAN_MCP strings outside .ralph/; tsc build clean; prettier format:check clean; tsc --noEmit clean; 488/488 vitest pass
 - handoff:
 
 ### N8.2 — Clean feature branch + draft PR superseding #3
@@ -239,3 +239,4 @@ N6 freshness proven red — "scenario 2: keyword older than registration leaves 
 #17 N6.4 PASS — added seedControlEvent injectable hook to SmsConfig; added seedControlEventAwareness() that determines transition (pending→active trigger-1, active→suppressed trigger-1, suppressed→active trigger-0) and seeds owning agent's session via getMessagingGroupByPlatform+getMessagingGroupAgents+resolveSession+writeSessionMessage (DB errors caught/warned); modified createSmsWebhookHandler to capture preControlState before keyword processing and pass it to seeding; added 3 tests (start+pending, stop+active, start+suppressed); 36/36 sms tests pass; tsc clean; vitest runner; project test file: src/channels/sms.test.ts.
 #18 N6.5 PASS — created src/sms-activation.test.ts with 6 scenarios using vi.mock(./config.js) to redirect DATA_DIR to a temp dir; scenario 2 uses real resolveActivationState (no injectable hook) and a file-system setup to pin the freshness comparison; proved freshness red: changing `>` to `>=` at sms.ts:435 caused scenario 2 to fail (expected inboundCalled false but received true); restored; 6/6 sms-activation tests pass, 488/488 full suite pass; vitest runner; project test file: src/sms-activation.test.ts.
 #19 N6-GATE PASS — fixed TS2554 in src/sms-activation.test.ts:59 (handler call missing { waitUntil: () => {} } second arg); ran N6-GATE.sh: all prose checks pass, full accumulated suite (N1.1..N6.5 + regression.sh) passes; 488/488 vitest; tsc clean; phase N6 prose acceptance verified.
+#20 N8.1 PASS — removed stale NANOCLAW_PAN_MCP_TOKEN + pan-mcp comment block from .env.example (admin-mcp docs already present from N5.2); git grep confirms no pan-mcp/PAN_MCP strings outside .ralph/; tsc build clean; prettier format:check clean; tsc --noEmit clean; 488/488 vitest pass; vitest runner; project deliverable: .env.example.
