@@ -10,5 +10,6 @@
   "N6.1": "src/admin-mcp.test.ts",
   "N6.2": "src/admin-mcp.test.ts",
   "N6.3": "src/channels/sms.test.ts",
-  "N6.4": "src/channels/sms.test.ts"
+  "N6.4": "src/channels/sms.test.ts",
+  "N6.5": "src/sms-activation.test.ts"
 }

@@ -1,5 +1,5 @@
 STATUS: READY        <!-- READY | RUNNING | DONE | BLOCKED | STUCK -->
-CURRENT: N6.5   <!-- the step a fresh round works next; never skip ahead -->
+CURRENT: N6-GATE   <!-- the step a fresh round works next; never skip ahead -->
 
 # 2026-06-10-nanoclaw-admin-mcp-generic build ledger
 
@@ -187,10 +187,11 @@ operator configs, and any OTHER run's dir. Targeted add only.
 - handoff:
 
 ### N6.5 — Six-scenario activation test file + prove freshness red
-- status: pending
+- status: done
 - rounds: 0
-- acceptance:
+- acceptance: see .ralph/runs/2026-06-10-nanoclaw-admin-mcp-generic/tests/N6.5.sh → src/sms-activation.test.ts — 6-scenario state machine test; N6 freshness proven red; full suite green
 - handoff:
+N6 freshness proven red — "scenario 2: keyword older than registration leaves pending": expected inboundCalled to be false but received true when `>` changed to `>=` (sms.ts:435)
 
 ### N6-GATE — phase gate: Opt-in state machine + awareness seeding (awareness inversion core)
 - status: pending
