@@ -1,4 +1,5 @@
 import fs from 'fs';
+import path from 'path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -19,6 +20,39 @@ import { closeDb, initTestDb, runMigrations } from './db/index.js';
 import { createAdminMcpHandler } from './admin-mcp.js';
 
 const TOKEN = 'admin-mcp-token-1234567890abcdef1234';
+
+type McpBody = {
+  result?: { content: Array<{ text: string }> };
+  error?: { message: string };
+};
+
+async function callTool(
+  handler: ReturnType<typeof createAdminMcpHandler>,
+  name: string,
+  args: Record<string, unknown>,
+): Promise<Response> {
+  return handler(
+    new Request('http://localhost/webhook/admin-mcp', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${TOKEN}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: { name, arguments: args },
+      }),
+    }),
+  );
+}
+
+async function toolResult(res: Response): Promise<Record<string, unknown>> {
+  const body = (await res.json()) as McpBody;
+  if (body.error) throw new Error(body.error.message);
+  return JSON.parse(body.result!.content[0].text) as Record<string, unknown>;
+}
 
 beforeEach(() => {
   if (fs.existsSync(TEST_DIR)) fs.rmSync(TEST_DIR, { recursive: true, force: true });
@@ -72,8 +106,235 @@ describe('Admin MCP endpoint', () => {
     expect(res.status).toBe(200);
     const frame = (await res.json()) as { result: { tools: Array<{ name: string }> } };
     const names = frame.result.tools.map((t) => t.name).sort();
-    expect(names).toEqual(
-      ['dm_register', 'dm_status', 'group_file_get', 'group_file_put', 'group_mount_set', 'group_put', 'shared_base_write'],
-    );
+    expect(names).toEqual([
+      'dm_register',
+      'dm_status',
+      'group_file_get',
+      'group_file_put',
+      'group_mount_set',
+      'group_put',
+      'shared_base_write',
+    ]);
+  });
+
+  describe('group_put', () => {
+    it('creates a group directory with files', async () => {
+      const handler = createAdminMcpHandler({ token: TOKEN });
+      const res = await callTool(handler, 'group_put', {
+        groupName: 'testgroup',
+        files: [{ path: 'CLAUDE.md', contentBase64: Buffer.from('hello').toString('base64'), mode: 0o644 }],
+        force: false,
+      });
+
+      expect(res.status).toBe(200);
+      const result = await toolResult(res);
+      expect(result.groupName).toBe('testgroup');
+      expect(result.files).toBe(1);
+      expect(fs.existsSync(path.join(`${TEST_DIR}/groups`, 'testgroup', 'CLAUDE.md'))).toBe(true);
+    });
+
+    it('rejects path escape in files[].path', async () => {
+      const handler = createAdminMcpHandler({ token: TOKEN });
+      const res = await callTool(handler, 'group_put', {
+        groupName: 'testgroup',
+        files: [{ path: '../../etc/passwd', contentBase64: Buffer.from('x').toString('base64') }],
+        force: false,
+      });
+
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as McpBody;
+      expect(body.error).toBeDefined();
+      expect(body.error!.message).toMatch(/escape/i);
+    });
+
+    it('force: false rejects existing group; force: true replaces it', async () => {
+      const handler = createAdminMcpHandler({ token: TOKEN });
+      // pre-create the directory so the group already exists
+      const groupDir = path.join(`${TEST_DIR}/groups`, 'forcedgroup');
+      fs.mkdirSync(groupDir, { recursive: true });
+
+      const rejectRes = await callTool(handler, 'group_put', {
+        groupName: 'forcedgroup',
+        files: [],
+        force: false,
+      });
+      expect(rejectRes.status).toBe(200);
+      const rejectBody = (await rejectRes.json()) as McpBody;
+      expect(rejectBody.error).toBeDefined();
+      expect(rejectBody.error!.message).toMatch(/already exists/i);
+
+      const forceRes = await callTool(handler, 'group_put', {
+        groupName: 'forcedgroup',
+        files: [{ path: 'CLAUDE.md', contentBase64: Buffer.from('replaced').toString('base64') }],
+        force: true,
+      });
+      expect(forceRes.status).toBe(200);
+      const forceResult = await toolResult(forceRes);
+      expect(forceResult.groupName).toBe('forcedgroup');
+      expect(forceResult.files).toBe(1);
+    });
+  });
+
+  describe('group_file_get', () => {
+    it('reads back a file written by group_put', async () => {
+      const handler = createAdminMcpHandler({ token: TOKEN });
+      const content = 'file content here';
+      await callTool(handler, 'group_put', {
+        groupName: 'testgroup',
+        files: [{ path: 'notes.txt', contentBase64: Buffer.from(content).toString('base64') }],
+        force: false,
+      });
+
+      const res = await callTool(handler, 'group_file_get', { groupName: 'testgroup', path: 'notes.txt' });
+
+      expect(res.status).toBe(200);
+      const result = await toolResult(res);
+      expect(Buffer.from(result.contentBase64 as string, 'base64').toString()).toBe(content);
+      expect(result.path).toBe('notes.txt');
+    });
+  });
+
+  describe('group_file_put', () => {
+    it('writes a file into an existing group', async () => {
+      const handler = createAdminMcpHandler({ token: TOKEN });
+      await callTool(handler, 'group_put', { groupName: 'testgroup', files: [], force: false });
+
+      const content = 'new content';
+      const res = await callTool(handler, 'group_file_put', {
+        groupName: 'testgroup',
+        path: 'added.txt',
+        contentBase64: Buffer.from(content).toString('base64'),
+      });
+
+      expect(res.status).toBe(200);
+      const result = await toolResult(res);
+      expect(result.bytes).toBe(content.length);
+      expect(result.path).toBe('added.txt');
+      expect(fs.readFileSync(path.join(`${TEST_DIR}/groups`, 'testgroup', 'added.txt'), 'utf8')).toBe(content);
+    });
+
+    it('rejects path escape in path argument', async () => {
+      const handler = createAdminMcpHandler({ token: TOKEN });
+      await callTool(handler, 'group_put', { groupName: 'testgroup', files: [], force: false });
+
+      const res = await callTool(handler, 'group_file_put', {
+        groupName: 'testgroup',
+        path: '../other/escape.txt',
+        contentBase64: Buffer.from('x').toString('base64'),
+      });
+
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as McpBody;
+      expect(body.error).toBeDefined();
+      expect(body.error!.message).toMatch(/escape/i);
+    });
+  });
+
+  describe('group_mount_set', () => {
+    it('writes container.json with additionalMounts', async () => {
+      const handler = createAdminMcpHandler({ token: TOKEN });
+      await callTool(handler, 'group_put', { groupName: 'destgroup', files: [], force: false });
+      await callTool(handler, 'group_put', { groupName: 'srcgroup', files: [], force: false });
+
+      const res = await callTool(handler, 'group_mount_set', {
+        groupName: 'destgroup',
+        mounts: [{ sourceGroup: 'srcgroup', containerPath: '/workspace/shared', readonly: true }],
+      });
+
+      expect(res.status).toBe(200);
+      const result = await toolResult(res);
+      expect(result.mounts).toBe(1);
+
+      const configPath = path.join(`${TEST_DIR}/groups`, 'destgroup', 'container.json');
+      expect(fs.existsSync(configPath)).toBe(true);
+      const config = JSON.parse(fs.readFileSync(configPath, 'utf8')) as {
+        additionalMounts: Array<{ containerPath: string; readonly: boolean }>;
+      };
+      expect(config.additionalMounts[0].containerPath).toBe('/workspace/shared');
+      expect(config.additionalMounts[0].readonly).toBe(true);
+    });
+  });
+
+  describe('dm_register', () => {
+    it('creates agent/messaging groups and returns registration fields', async () => {
+      const handler = createAdminMcpHandler({ token: TOKEN });
+      const res = await callTool(handler, 'dm_register', {
+        channel: 'sms',
+        address: '+15551234567',
+        groupName: 'smsgroup',
+        require_opt_in: false,
+      });
+
+      expect(res.status).toBe(200);
+      const result = await toolResult(res);
+      expect(result.channel).toBe('sms');
+      expect(result.address).toBe('+15551234567');
+      expect(result.groupName).toBe('smsgroup');
+      expect(result.newlyWired).toBe(true);
+      expect(result.requireOptIn).toBe(false);
+      expect(typeof result.agentGroupId).toBe('string');
+      expect(typeof result.messagingGroupId).toBe('string');
+    });
+  });
+
+  describe('shared_base_write', () => {
+    it('writes content to container/CLAUDE.md at the marker', async () => {
+      const marker = '<!-- admin-mcp-test-marker-N3.2 -->';
+      const testContent = 'test shared base content N3.2';
+      const dst = path.join(process.cwd(), 'container', 'CLAUDE.md');
+      const before = fs.existsSync(dst) ? fs.readFileSync(dst, 'utf8') : null;
+
+      const handler = createAdminMcpHandler({ token: TOKEN });
+      try {
+        const res = await callTool(handler, 'shared_base_write', { marker, content: testContent });
+
+        expect(res.status).toBe(200);
+        const result = await toolResult(res);
+        expect(result.path).toBe('container/CLAUDE.md');
+        expect(typeof result.bytes).toBe('number');
+        expect((result.bytes as number) > 0).toBe(true);
+        expect(fs.readFileSync(dst, 'utf8')).toContain(testContent);
+      } finally {
+        if (before === null) {
+          fs.rmSync(dst, { force: true });
+        } else {
+          fs.writeFileSync(dst, before, 'utf8');
+        }
+      }
+    });
+  });
+
+  describe('dm_status', () => {
+    it('returns registered:true and activationState after dm_register', async () => {
+      const handler = createAdminMcpHandler({ token: TOKEN });
+      await callTool(handler, 'dm_register', {
+        channel: 'sms',
+        address: '+15551234567',
+        groupName: 'statusgroup',
+        require_opt_in: false,
+      });
+
+      const res = await callTool(handler, 'dm_status', {
+        channel: 'sms',
+        address: '+15551234567',
+      });
+
+      expect(res.status).toBe(200);
+      const result = await toolResult(res);
+      expect(result.registered).toBe(true);
+      expect(result.activationState).toBe('active');
+    });
+
+    it('returns registered:false for unknown address', async () => {
+      const handler = createAdminMcpHandler({ token: TOKEN });
+      const res = await callTool(handler, 'dm_status', {
+        channel: 'sms',
+        address: '+19999999999',
+      });
+
+      expect(res.status).toBe(200);
+      const result = await toolResult(res);
+      expect(result.registered).toBe(false);
+    });
   });
 });
