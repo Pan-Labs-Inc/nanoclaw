@@ -1,5 +1,5 @@
 STATUS: READY        <!-- READY | RUNNING | DONE | BLOCKED | STUCK -->
-CURRENT: N6.2   <!-- the step a fresh round works next; never skip ahead -->
+CURRENT: N6.3   <!-- the step a fresh round works next; never skip ahead -->
 
 # 2026-06-10-nanoclaw-admin-mcp-generic build ledger
 
@@ -169,9 +169,9 @@ operator configs, and any OTHER run's dir. Targeted add only.
 - handoff:
 
 ### N6.2 — Born-suppressed registrations: pending until fresh keyword
-- status: pending
+- status: done
 - rounds: 0
-- acceptance:
+- acceptance: see .ralph/runs/2026-06-10-nanoclaw-admin-mcp-generic/tests/N6.2.sh → src/admin-mcp.test.ts — stale START event (at === registeredAt and at < registeredAt) leaves activationState pending; freshness comparison via strict '>'; 2 new stale-event tests; 27/27 admin-mcp tests pass, tsc clean
 - handoff:
 
 ### N6.3 — Consent-leak guard: keywords only while not active
@@ -233,3 +233,4 @@ operator configs, and any OTHER run's dir. Targeted add only.
 #12 N5.2 PASS — added assertGroupPrefixAllowed() (parses NANOCLAW_ADMIN_MCP_GROUP_PREFIXES, gates group_put/file_get/file_put/mount_set/dm_register); createAdminMcpHandler accepts groupPrefixes param for test injection; 3 new tests (out-of-prefix rejected, in-prefix allowed, empty=unrestricted); .env.example documents NANOCLAW_ADMIN_MCP_TOKEN + NANOCLAW_ADMIN_MCP_GROUP_PREFIXES; README gains Admin MCP Token Rotation section (generate/set-both-sides/restart/revoke); 21/21 admin-mcp tests pass; 471/471 full suite pass; tsc clean; vitest runner; project test file: src/admin-mcp.test.ts.
 #13 N5-GATE PASS — ran N1.1.sh, N2.1.sh, N3.1.sh, N3.2.sh, N4.1.sh, N4.2.sh, N5.1.sh, N5.2.sh, regression.sh (skipping *-GATE.sh to prevent cascade recursion); all 471 vitest pass; audit log + redactPlatformId + prefix scoping all verified; both env vars in .env.example; README rotation docs present; N5 redaction proven red in PROGRESS.md; phase N5 prose acceptance verified; wrote N5-GATE.sh; vitest runner.
 #14 N6.1 PASS — sms.ts now captures now once and writes both receivedAt and at: now in recordSmsControlEvent; SmsOptOutStore.controlEvents type adds at?: string; getSmsControlEvent return type updated; admin-mcp.ts readSmsOptOutStore type adds at?: string; dmStatusTool reads event.at ?? event.receivedAt and uses strict > for activationState comparison; 4 new dm_status tests (lastControlEvent.at shape, pending state, active after START with at>registeredAt, backward compat via receivedAt fallback); 25/25 admin-mcp tests pass, 477/477 full suite not re-run but tsc clean; project test file: src/admin-mcp.test.ts.
+#15 N6.2 PASS — 2 new stale-event tests: (1) START at===registeredAt leaves pending; (2) START at<registeredAt leaves pending; implementation already present from N6.1 (strict > comparison in dmStatusTool); 27/27 admin-mcp tests pass, tsc clean; project test file: src/admin-mcp.test.ts.

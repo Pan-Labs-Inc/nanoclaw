@@ -572,5 +572,68 @@ describe('Admin MCP endpoint', () => {
       expect((result.lastControlEvent as Record<string, string>).at).toBe(legacyAt);
       expect((result.lastControlEvent as Record<string, string>).keyword).toBe('STOP');
     });
+
+    it('stale START event (at === registeredAt) leaves activationState pending', async () => {
+      const handler = createAdminMcpHandler({ token: TOKEN });
+      const regRes = await callTool(handler, 'dm_register', {
+        channel: 'sms',
+        address: '+15555555555',
+        groupName: 'stalegroup',
+        require_opt_in: true,
+      });
+      const reg = await toolResult(regRes);
+      const registeredAt = reg.registeredAt as string;
+
+      // Event at === registeredAt is NOT strictly greater — must leave pending
+      const storeDir = path.join(TEST_DIR, 'data');
+      fs.mkdirSync(storeDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(storeDir, 'sms-opt-outs.json'),
+        JSON.stringify({
+          optedOut: {},
+          controlEvents: {
+            '+15555555555': { action: 'start', keyword: 'START', receivedAt: registeredAt, at: registeredAt },
+          },
+        }),
+        'utf8',
+      );
+
+      const res = await callTool(handler, 'dm_status', { channel: 'sms', address: '+15555555555' });
+      expect(res.status).toBe(200);
+      const result = await toolResult(res);
+      expect(result.activationState).toBe('pending');
+    });
+
+    it('stale START event (at < registeredAt) leaves activationState pending', async () => {
+      const handler = createAdminMcpHandler({ token: TOKEN });
+      const regRes = await callTool(handler, 'dm_register', {
+        channel: 'sms',
+        address: '+15556666666',
+        groupName: 'oldkeywordgroup',
+        require_opt_in: true,
+      });
+      const reg = await toolResult(regRes);
+      const registeredAt = reg.registeredAt as string;
+
+      // Event at < registeredAt (previous consent episode) — must leave pending
+      const oldAt = new Date(Date.parse(registeredAt) - 5000).toISOString();
+      const storeDir = path.join(TEST_DIR, 'data');
+      fs.mkdirSync(storeDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(storeDir, 'sms-opt-outs.json'),
+        JSON.stringify({
+          optedOut: {},
+          controlEvents: {
+            '+15556666666': { action: 'start', keyword: 'START', receivedAt: oldAt, at: oldAt },
+          },
+        }),
+        'utf8',
+      );
+
+      const res = await callTool(handler, 'dm_status', { channel: 'sms', address: '+15556666666' });
+      expect(res.status).toBe(200);
+      const result = await toolResult(res);
+      expect(result.activationState).toBe('pending');
+    });
   });
 });
