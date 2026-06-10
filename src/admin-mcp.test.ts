@@ -398,6 +398,45 @@ describe('Admin MCP endpoint', () => {
     });
   });
 
+  describe('group prefix scoping', () => {
+    it('rejects group-targeting verb when groupName does not match any prefix', async () => {
+      const handler = createAdminMcpHandler({ token: TOKEN, groupPrefixes: 'allowed-,prod-' });
+      const res = await callTool(handler, 'group_put', {
+        groupName: 'notallowed',
+        files: [],
+        force: false,
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as McpBody;
+      expect(body.error).toBeDefined();
+      expect(body.error!.message).toMatch(/prefix/i);
+    });
+
+    it('allows group-targeting verb when groupName matches a prefix', async () => {
+      const handler = createAdminMcpHandler({ token: TOKEN, groupPrefixes: 'allowed-,prod-' });
+      const res = await callTool(handler, 'group_put', {
+        groupName: 'allowed-agent',
+        files: [],
+        force: false,
+      });
+      expect(res.status).toBe(200);
+      const result = await toolResult(res);
+      expect(result.groupName).toBe('allowed-agent');
+    });
+
+    it('allows all groups when groupPrefixes is empty (no restriction)', async () => {
+      const handler = createAdminMcpHandler({ token: TOKEN, groupPrefixes: '' });
+      const res = await callTool(handler, 'group_put', {
+        groupName: 'anygroup',
+        files: [],
+        force: false,
+      });
+      expect(res.status).toBe(200);
+      const result = await toolResult(res);
+      expect(result.groupName).toBe('anygroup');
+    });
+  });
+
   describe('dm_status', () => {
     it('returns registered:true and activationState after dm_register', async () => {
       const handler = createAdminMcpHandler({ token: TOKEN });

@@ -68,7 +68,26 @@ const toolDescriptions: Record<string, string> = {
   dm_status: 'Read the activation state and last control event for a registered DM address.',
 };
 
-export function createAdminMcpHandler({ token = process.env.NANOCLAW_ADMIN_MCP_TOKEN } = {}) {
+const GROUP_SCOPED_VERBS = new Set(['group_put', 'group_file_get', 'group_file_put', 'group_mount_set', 'dm_register']);
+
+function assertGroupPrefixAllowed(
+  name: string,
+  args: Record<string, unknown>,
+  groupPrefixes: string | undefined,
+): void {
+  if (!groupPrefixes || !GROUP_SCOPED_VERBS.has(name)) return;
+  const prefixes = groupPrefixes.split(',').map((p) => p.trim()).filter(Boolean);
+  if (prefixes.length === 0) return;
+  const groupName = typeof args.groupName === 'string' ? args.groupName : '';
+  if (!prefixes.some((p) => groupName.startsWith(p))) {
+    throw new Error(`Group '${groupName}' is not in the allowed prefix scope`);
+  }
+}
+
+export function createAdminMcpHandler({
+  token = process.env.NANOCLAW_ADMIN_MCP_TOKEN,
+  groupPrefixes = process.env.NANOCLAW_ADMIN_MCP_GROUP_PREFIXES,
+} = {}) {
   return async (request: Request): Promise<Response> => {
     if (request.method !== 'POST') return textResponse('Not found', 404);
     if (!token) return textResponse('Admin MCP endpoint is disabled', 404);
@@ -110,6 +129,7 @@ export function createAdminMcpHandler({ token = process.env.NANOCLAW_ADMIN_MCP_T
         const target = auditTarget(name, args);
         let payload: unknown;
         try {
+          assertGroupPrefixAllowed(name, args, groupPrefixes);
           payload = await handler(args);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);

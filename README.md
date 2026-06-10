@@ -160,6 +160,24 @@ Key files:
 - `container/agent-runner/` — Bun agent-runner: poll loop, MCP tools, provider abstraction
 - `groups/<folder>/` — per-agent-group filesystem (`CLAUDE.md`, skills, container config)
 
+## Admin MCP Token Rotation
+
+The admin MCP endpoint (`POST /webhook/admin-mcp`) is protected by a static bearer token (`NANOCLAW_ADMIN_MCP_TOKEN`). If a token is leaked or you rotate as routine policy:
+
+1. **Generate a new token:**
+   ```bash
+   openssl rand -hex 32
+   ```
+2. **Set both sides:** update `NANOCLAW_ADMIN_MCP_TOKEN` in `.env` on the NanoClaw host **and** update the token in any client (deployment script, CI secret, calling agent) at the same time.
+3. **Restart the host** to pick up the new token:
+   ```bash
+   systemctl --user restart nanoclaw   # Linux
+   launchctl kickstart -k gui/$(id -u)/com.nanoclaw  # macOS
+   ```
+4. **Revoke the old token** by confirming the old value is no longer in `.env` and that no client still holds it.
+
+To limit blast radius in case of a future leak, set `NANOCLAW_ADMIN_MCP_GROUP_PREFIXES` to a comma-separated list of allowed group-name prefixes (e.g. `sms-,prod-`). Group-targeting verbs will then reject any group whose name does not start with a listed prefix.
+
 ## FAQ
 
 **Why Docker?**
