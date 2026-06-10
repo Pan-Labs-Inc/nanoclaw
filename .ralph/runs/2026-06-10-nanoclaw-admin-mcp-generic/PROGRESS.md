@@ -1,5 +1,5 @@
 STATUS: READY        <!-- READY | RUNNING | DONE | BLOCKED | STUCK -->
-CURRENT: N1.1   <!-- the step a fresh round works next; never skip ahead -->
+CURRENT: N1-GATE   <!-- the step a fresh round works next; never skip ahead -->
 
 # 2026-06-10-nanoclaw-admin-mcp-generic build ledger
 
@@ -82,9 +82,9 @@ operator configs, and any OTHER run's dir. Targeted add only.
 ## Steps (ledger order == dependency order; do not reorder)
 
 ### N1.1 — Merge PR #3 head into the run branch and verify green
-- status: pending
+- status: done
 - rounds: 0
-- acceptance:
+- acceptance: see .ralph/runs/2026-06-10-nanoclaw-admin-mcp-generic/tests/N1.1.sh — PR #3 head (f624ee4) merged, tsc clean, all 446 vitest tests pass, no dep drift vs origin/main
 - handoff:
 
 ### N1-GATE — phase gate: Baseline: merge PR #3 head onto current main
@@ -216,3 +216,4 @@ operator configs, and any OTHER run's dir. Targeted add only.
 
 ## Round log (append-only; newest at bottom)
 <!-- one entry per round: `#N <step> <PASS|FAIL|BLOCKED> — what happened / handoff` -->
+#1 N1.1 PASS — fetched origin/main + refs/pull/3/head; merged f624ee4 (no-ff merge commit); fixed pre-existing q.test.ts env issue (spawnSync('pnpm'→tsx path) so tests run on machines without pnpm in PATH; vitest runner: vitest; 446/446 pass; tsc clean; no dep drift. Project test file: scripts/q.test.ts.
