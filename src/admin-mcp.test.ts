@@ -469,5 +469,108 @@ describe('Admin MCP endpoint', () => {
       const result = await toolResult(res);
       expect(result.registered).toBe(false);
     });
+
+    it('returns lastControlEvent {keyword, at} when a control event is stored', async () => {
+      const handler = createAdminMcpHandler({ token: TOKEN });
+      const regRes = await callTool(handler, 'dm_register', {
+        channel: 'sms',
+        address: '+15551234567',
+        groupName: 'tseventgroup',
+        require_opt_in: false,
+      });
+      const reg = await toolResult(regRes);
+      const registeredAt = reg.registeredAt as string;
+
+      const eventAt = new Date(Date.parse(registeredAt) + 1000).toISOString();
+      const storeDir = path.join(TEST_DIR, 'data');
+      fs.mkdirSync(storeDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(storeDir, 'sms-opt-outs.json'),
+        JSON.stringify({
+          optedOut: {},
+          controlEvents: { '+15551234567': { action: 'start', keyword: 'START', receivedAt: eventAt, at: eventAt } },
+        }),
+        'utf8',
+      );
+
+      const res = await callTool(handler, 'dm_status', { channel: 'sms', address: '+15551234567' });
+      expect(res.status).toBe(200);
+      const result = await toolResult(res);
+      expect(result.lastControlEvent).toEqual({ keyword: 'START', at: eventAt });
+    });
+
+    it('returns activationState pending when require_opt_in=true and no START event', async () => {
+      const handler = createAdminMcpHandler({ token: TOKEN });
+      await callTool(handler, 'dm_register', {
+        channel: 'sms',
+        address: '+15552222222',
+        groupName: 'pendinggroup',
+        require_opt_in: true,
+      });
+
+      const res = await callTool(handler, 'dm_status', { channel: 'sms', address: '+15552222222' });
+      expect(res.status).toBe(200);
+      const result = await toolResult(res);
+      expect(result.activationState).toBe('pending');
+      expect(result.lastControlEvent).toBeNull();
+    });
+
+    it('returns activationState active after START event with at strictly > registeredAt', async () => {
+      const handler = createAdminMcpHandler({ token: TOKEN });
+      const regRes = await callTool(handler, 'dm_register', {
+        channel: 'sms',
+        address: '+15553333333',
+        groupName: 'activategroup',
+        require_opt_in: true,
+      });
+      const reg = await toolResult(regRes);
+      const registeredAt = reg.registeredAt as string;
+
+      const startAt = new Date(Date.parse(registeredAt) + 1000).toISOString();
+      const storeDir = path.join(TEST_DIR, 'data');
+      fs.mkdirSync(storeDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(storeDir, 'sms-opt-outs.json'),
+        JSON.stringify({
+          optedOut: {},
+          controlEvents: { '+15553333333': { action: 'start', keyword: 'START', receivedAt: startAt, at: startAt } },
+        }),
+        'utf8',
+      );
+
+      const res = await callTool(handler, 'dm_status', { channel: 'sms', address: '+15553333333' });
+      expect(res.status).toBe(200);
+      const result = await toolResult(res);
+      expect(result.activationState).toBe('active');
+      expect((result.lastControlEvent as Record<string, string>).keyword).toBe('START');
+    });
+
+    it('backward compat: lastControlEvent.at falls back to receivedAt when at field absent', async () => {
+      const handler = createAdminMcpHandler({ token: TOKEN });
+      await callTool(handler, 'dm_register', {
+        channel: 'sms',
+        address: '+15554444444',
+        groupName: 'backcompatgroup',
+        require_opt_in: false,
+      });
+
+      const legacyAt = '2025-01-01T00:00:00.000Z';
+      const storeDir = path.join(TEST_DIR, 'data');
+      fs.mkdirSync(storeDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(storeDir, 'sms-opt-outs.json'),
+        JSON.stringify({
+          optedOut: {},
+          controlEvents: { '+15554444444': { action: 'stop', keyword: 'STOP', receivedAt: legacyAt } },
+        }),
+        'utf8',
+      );
+
+      const res = await callTool(handler, 'dm_status', { channel: 'sms', address: '+15554444444' });
+      expect(res.status).toBe(200);
+      const result = await toolResult(res);
+      expect((result.lastControlEvent as Record<string, string>).at).toBe(legacyAt);
+      expect((result.lastControlEvent as Record<string, string>).keyword).toBe('STOP');
+    });
   });
 });

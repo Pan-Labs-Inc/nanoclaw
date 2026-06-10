@@ -76,7 +76,10 @@ function assertGroupPrefixAllowed(
   groupPrefixes: string | undefined,
 ): void {
   if (!groupPrefixes || !GROUP_SCOPED_VERBS.has(name)) return;
-  const prefixes = groupPrefixes.split(',').map((p) => p.trim()).filter(Boolean);
+  const prefixes = groupPrefixes
+    .split(',')
+    .map((p) => p.trim())
+    .filter(Boolean);
   if (prefixes.length === 0) return;
   const groupName = typeof args.groupName === 'string' ? args.groupName : '';
   if (!prefixes.some((p) => groupName.startsWith(p))) {
@@ -380,12 +383,13 @@ function dmStatusTool(args: Record<string, unknown>) {
     const key = address.trim();
     const event = store.controlEvents?.[key];
     if (event) {
-      lastControlEvent = { keyword: event.keyword, at: event.receivedAt };
+      lastControlEvent = { keyword: event.keyword, at: event.at ?? event.receivedAt };
     }
     if (store.optedOut?.[key]) {
       activationState = 'suppressed';
     } else if (reg?.requireOptIn) {
-      const hasActivatingEvent = event && event.action === 'start' && event.receivedAt >= (reg.registeredAt ?? '');
+      const hasActivatingEvent =
+        event && event.action === 'start' && (event.at ?? event.receivedAt) > (reg.registeredAt ?? '');
       activationState = hasActivatingEvent ? 'active' : 'pending';
     }
   } else if (reg?.requireOptIn) {
@@ -414,14 +418,14 @@ function writeDmRegistrations(regs: Record<string, DmRegistration>): void {
 
 function readSmsOptOutStore(): {
   optedOut?: Record<string, { optedOutAt: string }>;
-  controlEvents?: Record<string, { action: string; keyword: string; receivedAt: string }>;
+  controlEvents?: Record<string, { action: string; keyword: string; receivedAt: string; at?: string }>;
 } {
   const storePath = path.join(DATA_DIR, SMS_OPT_OUT_STORE_FILE);
   if (!fs.existsSync(storePath)) return { optedOut: {}, controlEvents: {} };
   try {
     const parsed = JSON.parse(fs.readFileSync(storePath, 'utf8')) as {
       optedOut?: Record<string, { optedOutAt: string }>;
-      controlEvents?: Record<string, { action: string; keyword: string; receivedAt: string }>;
+      controlEvents?: Record<string, { action: string; keyword: string; receivedAt: string; at?: string }>;
     };
     if (!parsed || typeof parsed !== 'object') return { optedOut: {}, controlEvents: {} };
     return parsed;

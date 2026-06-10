@@ -519,7 +519,7 @@ interface SmsOptOutStore {
   // the carrier-facing enforcement point, but NanoClaw checks this store before
   // every outbound send so STOP works even before a provider-side lookup exists.
   optedOut: Record<string, { optedOutAt: string }>;
-  controlEvents: Record<string, { action: SmsControlAction; keyword: string; receivedAt: string }>;
+  controlEvents: Record<string, { action: SmsControlAction; keyword: string; receivedAt: string; at?: string }>;
 }
 
 /** Report whether outbound SMS should be suppressed for this phone number. */
@@ -555,7 +555,7 @@ export function setSmsOptOut(phone: string, optedOut: boolean, config: SmsConfig
 export function getSmsControlEvent(
   phone: string,
   config: SmsConfig,
-): { action: SmsControlAction; keyword: string; receivedAt: string } | undefined {
+): { action: SmsControlAction; keyword: string; receivedAt: string; at?: string } | undefined {
   return readSmsOptOutStore(config).controlEvents[normalizePhoneKey(phone)];
 }
 
@@ -564,15 +564,17 @@ function recordSmsControlEvent(phone: string, action: SmsControlAction, keyword:
   const key = normalizePhoneKey(phone);
   if (!key) return;
   const store = readSmsOptOutStore(config);
+  const now = new Date().toISOString();
   if (action === 'stop') {
-    store.optedOut[key] = { optedOutAt: new Date().toISOString() };
+    store.optedOut[key] = { optedOutAt: now };
   } else if (action === 'start') {
     delete store.optedOut[key];
   }
   store.controlEvents[key] = {
     action,
     keyword,
-    receivedAt: new Date().toISOString(),
+    receivedAt: now,
+    at: now,
   };
   writeSmsOptOutStore(config, store);
 }
