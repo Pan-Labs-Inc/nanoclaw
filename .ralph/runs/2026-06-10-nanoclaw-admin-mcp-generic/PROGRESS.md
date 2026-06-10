@@ -1,5 +1,5 @@
 STATUS: READY        <!-- READY | RUNNING | DONE | BLOCKED | STUCK -->
-CURRENT: N3-GATE   <!-- the step a fresh round works next; never skip ahead -->
+CURRENT: N4.1   <!-- the step a fresh round works next; never skip ahead -->
 
 # 2026-06-10-nanoclaw-admin-mcp-generic build ledger
 
@@ -119,9 +119,9 @@ operator configs, and any OTHER run's dir. Targeted add only.
 - handoff:
 
 ### N3-GATE — phase gate: Contract freeze: rename to admin-mcp, 7 generic verbs, zero Pan semantics
-- status: pending
+- status: done
 - rounds: 0
-- acceptance:
+- acceptance: see .ralph/runs/2026-06-10-nanoclaw-admin-mcp-generic/tests/N3-GATE.sh — phase N3 full suite (N1.1.sh, N2.1.sh, N3.1.sh, N3.2.sh) passes; admin-mcp.ts exists, pan-mcp.ts gone, 7 verbs, no Pan identifiers, tsc clean, 464/464 vitest pass
 - handoff:
 
 ### N4.1 — Determine the live mount-config reader and make group_mount_set write it
@@ -223,3 +223,4 @@ operator configs, and any OTHER run's dir. Targeted add only.
 #4 N2-GATE PASS — ran N1.1.sh, N1-GATE.sh, N2.1.sh (all 455 vitest pass, tsc clean, disposition line present); wrote N2-GATE.sh; phase N2 acceptance verified.
 #5 N3.1 PASS — git mv src/pan-mcp.ts src/admin-mcp.ts; rewrote with 7 generic verbs (group_put, group_file_get, group_file_put, group_mount_set, dm_register, shared_base_write, dm_status); deleted pan-mcp.test.ts; wrote minimal src/admin-mcp.test.ts; updated src/index.ts import; tsc clean; 453/453 vitest pass; no banned Pan identifiers; project test file: src/admin-mcp.test.ts.
 #6 N3.2 PASS — expanded src/admin-mcp.test.ts from 3 to 14 tests: path-escape rejection (group_put files[].path + group_file_put path arg), force semantics (reject existing without force / succeed with force), happy-path for all 7 verbs (group_put/file_get/file_put/mount_set/dm_register/shared_base_write/dm_status) with GROUPS_DIR fixture + save/restore container/CLAUDE.md; dm_status registered:false for unknown; vitest runner; 464/464 pass; project test file: src/admin-mcp.test.ts.
+#7 N3-GATE PASS — ran N3-GATE.sh (skipping *-GATE.sh to prevent cascade recursion via N2-GATE); N1.1.sh, N2.1.sh, N3.1.sh, N3.2.sh all pass; 464/464 vitest; tsc clean; phase N3 prose acceptance verified; updated regression.sh; vitest runner.

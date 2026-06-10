@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # regression.sh — runs all project test files registered in manifest.json
-# Generated at N1-GATE pass. Re-run any time to verify no regressions.
+# Generated at N3-GATE pass. Re-run any time to verify no regressions.
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
