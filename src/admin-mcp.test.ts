@@ -17,6 +17,8 @@ vi.mock('./config.js', async () => {
 });
 
 import { closeDb, initTestDb, runMigrations } from './db/index.js';
+import { getContainerConfig } from './db/container-configs.js';
+import { getAgentGroupByFolder } from './db/agent-groups.js';
 import { createAdminMcpHandler } from './admin-mcp.js';
 
 const TOKEN = 'admin-mcp-token-1234567890abcdef1234';
@@ -231,7 +233,7 @@ describe('Admin MCP endpoint', () => {
   });
 
   describe('group_mount_set', () => {
-    it('writes container.json with additionalMounts', async () => {
+    it('writes additional_mounts to container_configs DB row', async () => {
       const handler = createAdminMcpHandler({ token: TOKEN });
       await callTool(handler, 'group_put', { groupName: 'destgroup', files: [], force: false });
       await callTool(handler, 'group_put', { groupName: 'srcgroup', files: [], force: false });
@@ -245,13 +247,16 @@ describe('Admin MCP endpoint', () => {
       const result = await toolResult(res);
       expect(result.mounts).toBe(1);
 
-      const configPath = path.join(`${TEST_DIR}/groups`, 'destgroup', 'container.json');
-      expect(fs.existsSync(configPath)).toBe(true);
-      const config = JSON.parse(fs.readFileSync(configPath, 'utf8')) as {
-        additionalMounts: Array<{ containerPath: string; readonly: boolean }>;
-      };
-      expect(config.additionalMounts[0].containerPath).toBe('/workspace/shared');
-      expect(config.additionalMounts[0].readonly).toBe(true);
+      const agentGroup = getAgentGroupByFolder('destgroup');
+      expect(agentGroup).toBeDefined();
+      const row = getContainerConfig(agentGroup!.id);
+      expect(row).toBeDefined();
+      const mounts = JSON.parse(row!.additional_mounts) as Array<{
+        containerPath: string;
+        readonly: boolean;
+      }>;
+      expect(mounts[0].containerPath).toBe('/workspace/shared');
+      expect(mounts[0].readonly).toBe(true);
     });
   });
 

@@ -12,6 +12,7 @@ import path from 'path';
 
 import { DATA_DIR, GROUPS_DIR } from './config.js';
 import { createAgentGroup, getAgentGroupByFolder } from './db/agent-groups.js';
+import { ensureContainerConfig, updateContainerConfigJson } from './db/container-configs.js';
 import {
   createMessagingGroup,
   createMessagingGroupAgent,
@@ -194,6 +195,13 @@ function groupMountSetTool(args: Record<string, unknown>) {
   const groupDir = path.join(GROUPS_DIR, groupName);
   if (!fs.existsSync(groupDir)) throw new Error(`Group '${groupName}' does not exist`);
 
+  let agentGroup = getAgentGroupByFolder(groupName);
+  if (!agentGroup) {
+    createAgentGroup({ id: generateId('ag'), name: groupName, folder: groupName, agent_provider: null, created_at: new Date().toISOString() });
+    agentGroup = getAgentGroupByFolder(groupName);
+    if (!agentGroup) throw new Error(`Could not create agent group for '${groupName}'`);
+  }
+
   const additionalMounts = mounts.map((m) => {
     if (!m || typeof m !== 'object') throw new Error('mounts entries must be objects');
     const mount = m as Record<string, unknown>;
@@ -208,8 +216,8 @@ function groupMountSetTool(args: Record<string, unknown>) {
     };
   });
 
-  const config = `${JSON.stringify({ additionalMounts }, null, 2)}\n`;
-  fs.writeFileSync(path.join(groupDir, 'container.json'), config, 'utf8');
+  ensureContainerConfig(agentGroup.id);
+  updateContainerConfigJson(agentGroup.id, 'additional_mounts', additionalMounts);
   return { groupName, mounts: mounts.length };
 }
 
@@ -340,8 +348,7 @@ function dmStatusTool(args: Record<string, unknown>) {
     if (store.optedOut?.[key]) {
       activationState = 'suppressed';
     } else if (reg?.requireOptIn) {
-      const hasActivatingEvent =
-        event && event.action === 'start' && event.receivedAt >= (reg.registeredAt ?? '');
+      const hasActivatingEvent = event && event.action === 'start' && event.receivedAt >= (reg.registeredAt ?? '');
       activationState = hasActivatingEvent ? 'active' : 'pending';
     }
   } else if (reg?.requireOptIn) {
