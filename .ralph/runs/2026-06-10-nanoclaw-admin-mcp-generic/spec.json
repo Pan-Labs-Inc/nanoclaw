@@ -1,0 +1,432 @@
+{
+  "schema_version": 2,
+  "plan": "Genericize the nanoclaw admin MCP endpoint from PR #3 (rename pan-mcp to admin-mcp, 7 Pan-free verbs), cherry-pick upstream security authz commits, reconcile mount-config truth, harden the endpoint (audit log, prefix scoping, rotation docs), and implement the register-first born-suppressed SMS opt-in state machine with messages_in awareness seeding. Finish with a clean feature branch and a draft PR superseding #3.",
+  "plan_file": ".ralph/runs/2026-06-10-nanoclaw-admin-mcp-generic/plan.md",
+  "created": "2026-06-10",
+  "repo": "local:/Users/dustin/Source/pan/nanoclaw",
+  "epic": {
+    "title": "Generic admin MCP + SMS opt-in state machine (supersedes PR #3 interface)",
+    "body": "Refactor of PR #3 per review 2026-06-10: keep the SMS channel + owner-exposed-verbs direction, remove all Pan semantics from nanoclaw source, harden the endpoint, and invert opt-in to register-first born-suppressed with awareness seeded to the owning agent via messages_in. Verb contract and decisions are frozen in the run plan.md \u2014 execute, do not relitigate."
+  },
+  "phases": [
+    {
+      "id": "N1",
+      "name": "Baseline: merge PR #3 head onto current main",
+      "acceptance": "Run-branch HEAD contains the merge of refs/pull/3/head (sha f624ee4) and origin/main; npx tsc --noEmit exits 0; npx vitest run exits 0; package.json and pnpm-lock.yaml are byte-identical to origin/main (the PR adds no dependencies).",
+      "acceptance_checks": [
+        {
+          "id": "n1-pr3-merged",
+          "kind": "shell",
+          "cmd": "git merge-base --is-ancestor f624ee4 HEAD",
+          "expect_exit": 0
+        },
+        {
+          "id": "n1-tsc",
+          "kind": "shell",
+          "cmd": "npx tsc --noEmit --pretty false",
+          "expect_exit": 0
+        },
+        {
+          "id": "n1-vitest",
+          "kind": "shell",
+          "cmd": "npx vitest run",
+          "expect_exit": 0
+        },
+        {
+          "id": "n1-deps-unchanged",
+          "kind": "shell",
+          "cmd": "git diff --quiet $(git merge-base origin/main HEAD) HEAD -- package.json pnpm-lock.yaml",
+          "expect_exit": 0
+        }
+      ],
+      "tasks": [
+        {
+          "id": "N1.1",
+          "title": "Merge PR #3 head into the run branch and verify green",
+          "labels": [
+            "nanoclaw",
+            "setup"
+          ],
+          "body": "Intent: establish the refactor baseline = PR #3's SMS channel on top of current main. The merge was verified conflict-free and green on 2026-06-10 \u2014 do not re-derive that analysis, just perform it.\nAction: corepack enable && pnpm install --frozen-lockfile (idempotent \u2014 any later round may re-run this if node_modules is missing). Preflight `git ls-remote origin refs/pull/3/head` (origin = Pan-Labs-Inc/nanoclaw; the VM's clone credentials cover the read). git fetch origin main +refs/pull/3/head:refs/remotes/origin/pr-3-ref. git merge f624ee4 (PR #3 head) into the run branch with a descriptive merge commit. Run npx tsc --noEmit and npx vitest run.\nOutput: a merge commit on ralph/2026-06-10-nanoclaw-admin-mcp-generic containing both parents; suite and typecheck green; no package.json/pnpm-lock.yaml drift vs origin/main.\nDeps: none."
+        }
+      ]
+    },
+    {
+      "id": "N2",
+      "name": "Upstream security cherry-picks",
+      "acceptance": "PROGRESS.md carries a line beginning 'N2 cherry-pick disposition:' naming each of c6627d3, 6227bd1, 7d15dbc, 6420c0e as taken or abandoned-with-reason; after the picks npx vitest run and npx tsc --noEmit exit 0.",
+      "acceptance_checks": [
+        {
+          "id": "n2-disposition",
+          "kind": "shell",
+          "cmd": "grep -q 'N2 cherry-pick disposition:' .ralph/runs/2026-06-10-nanoclaw-admin-mcp-generic/PROGRESS.md",
+          "expect_exit": 0
+        },
+        {
+          "id": "n2-tsc",
+          "kind": "shell",
+          "cmd": "npx tsc --noEmit --pretty false",
+          "expect_exit": 0
+        },
+        {
+          "id": "n2-vitest",
+          "kind": "shell",
+          "cmd": "npx vitest run",
+          "expect_exit": 0
+        }
+      ],
+      "tasks": [
+        {
+          "id": "N2.1",
+          "title": "Cherry-pick upstream authz commits and record disposition",
+          "labels": [
+            "nanoclaw",
+            "security"
+          ],
+          "body": "Intent: the admin endpoint must follow upstream's host-side re-authorization patterns; these commits carry them and are accumulating security value the fork lacks.\nAction: git remote add upstream https://github.com/qwibitai/nanoclaw.git (if absent) && git fetch upstream (public repo; network only \u2014 the four shas resolve only after this fetch). Cherry-pick in order: c6627d3 (authorize create_agent host-side), 6227bd1 (approval-response admin authz), 7d15dbc (scope channel approval targets). Resolve mechanical conflicts only. Evaluate 6420c0e (opt-in egress lockdown): take it iff it applies cleanly; otherwise abandon. If any pick conflicts beyond mechanical resolution, abort THAT pick (git cherry-pick --abort), record why, continue with the rest \u2014 never force a semantic merge. Append to the ledger Pointers a single line: 'N2 cherry-pick disposition: c6627d3=<taken|abandoned: reason>; 6227bd1=...; 7d15dbc=...; 6420c0e=...'.\nAn all-abandoned disposition is a red flag \u2014 mark it 'NEEDS OPERATOR REVIEW' in the line. Output: picked commits on the run branch, the disposition line in PROGRESS.md, suite green.\nDeps: N1.1."
+        }
+      ]
+    },
+    {
+      "id": "N3",
+      "name": "Contract freeze: rename to admin-mcp, 7 generic verbs, zero Pan semantics",
+      "acceptance": "src/admin-mcp.ts exists and src/pan-mcp.ts does not; tools/list returns exactly the set {group_put, group_file_get, group_file_put, group_mount_set, dm_register, shared_base_write, dm_status}; the endpoint path is /webhook/admin-mcp and the token env is NANOCLAW_ADMIN_MCP_TOKEN; none of the deleted Pan identifiers (pan_sms_, readFamilyEnrollment, pan-enrollment, personaArg, renderOptInRecord, GROUP_NAME_RE) appear in src/admin-mcp.ts, and no new Pan semantics are introduced (prose rule enforced again by the N8 repo-wide sweep); npx vitest run src/admin-mcp.test.ts and the full suite exit 0.",
+      "acceptance_checks": [
+        {
+          "id": "n3-admin-file",
+          "kind": "file_exists",
+          "path": "src/admin-mcp.ts"
+        },
+        {
+          "id": "n3-pan-file-gone",
+          "kind": "shell",
+          "cmd": "test ! -f src/pan-mcp.ts && test ! -f src/pan-mcp.test.ts",
+          "expect_exit": 0
+        },
+        {
+          "id": "n3-no-pan-strings",
+          "kind": "shell",
+          "cmd": "grep -qE 'pan_sms_|readFamilyEnrollment|pan-enrollment|personaArg|renderOptInRecord|GROUP_NAME_RE' src/admin-mcp.ts",
+          "expect_exit": 1
+        },
+        {
+          "id": "n3-contract-surface",
+          "kind": "shell",
+          "cmd": "for s in group_put group_file_get group_file_put group_mount_set dm_register shared_base_write dm_status admin-mcp NANOCLAW_ADMIN_MCP_TOKEN; do grep -q \"$s\" src/admin-mcp.ts || exit 1; done",
+          "expect_exit": 0
+        },
+        {
+          "id": "n3-test-file",
+          "kind": "file_exists",
+          "path": "src/admin-mcp.test.ts"
+        },
+        {
+          "id": "n3-focused",
+          "kind": "shell",
+          "cmd": "npx vitest run src/admin-mcp.test.ts",
+          "expect_exit": 0
+        },
+        {
+          "id": "n3-suite",
+          "kind": "shell",
+          "cmd": "npx vitest run",
+          "expect_exit": 0
+        }
+      ],
+      "tasks": [
+        {
+          "id": "N3.1",
+          "title": "Implement the 7-verb generic surface in src/admin-mcp.ts",
+          "labels": [
+            "nanoclaw",
+            "refactor"
+          ],
+          "body": "Intent: nanoclaw must expose only nanoclaw-generic operations; all Pan knowledge moves to the Pan client (ownership boundary). The verb table in plan.md ('Verb contract') is frozen \u2014 implement it exactly.\nAction: git mv src/pan-mcp.ts src/admin-mcp.ts, then rework: endpoint name 'admin-mcp' (path /webhook/admin-mcp), token env NANOCLAW_ADMIN_MCP_TOKEN (404 when unset, 403 on bad token via timingSafeEqual \u2014 keep). Verbs: group_put {groupName, files[{path,contentBase64,mode}], force} validating groupName ONLY via isValidGroupFolder (delete GROUP_NAME_RE), keeping atomic staging + safeRelativePath; group_file_get {groupName, path} raw read; group_file_put {groupName, path, contentBase64, mode} atomic write; group_mount_set {groupName, mounts[{sourceGroup, containerPath, readonly}]} (format finalized in N4 \u2014 write the PR's container.json shape for now); dm_register {channel, address, groupName, displayName?, require_opt_in?} reusing createAgentGroup/createMessagingGroup/etc., generating leading-letter gateway-safe ids and populating container_configs (the two ncl-groups-create bugs \u2014 see plan.md), persisting require_opt_in + registration timestamp (full state machine lands in N6); shared_base_write {marker, content} with marker idempotency identical to the PR; dm_status {channel, address} returning {registered, activationState, lastControlEvent}. DELETE: readFamilyEnrollment, .pan-enrollment parsing, persona args, opt-in record rendering (renderOptInRecord, optInPath, readOptInRaw), pan_sms_resolve_phone, E164/persona helpers that exist only for them. Keep parseKeyValue out (Pan parses). Update src/index.ts import and webhook registration.\nOutput: src/admin-mcp.ts with exactly the 7 verbs, no pan tokens, compiling clean.\nDeps: N2.1."
+        },
+        {
+          "id": "N3.2",
+          "title": "Rewrite the endpoint test suite as src/admin-mcp.test.ts",
+          "labels": [
+            "nanoclaw",
+            "tests"
+          ],
+          "body": "Intent: pin the frozen contract so drift is a red build, not a Pan-side prod surprise.\nAction: git mv/rewrite src/pan-mcp.test.ts to src/admin-mcp.test.ts. Must assert: tools/list returns EXACTLY the 7 contract verb names (set equality, not subset); missing token = 404; wrong token = 403; path-escape attempts in group_put/group_file_put are rejected; one happy-path call per verb against a temp GROUPS_DIR fixture; group_put force semantics.\nOutput: src/admin-mcp.test.ts green via npx vitest run src/admin-mcp.test.ts; full suite green.\nDeps: N3.1."
+        }
+      ]
+    },
+    {
+      "id": "N4",
+      "name": "Mount-config truth reconciliation",
+      "acceptance": "PROGRESS.md carries a line beginning 'N4 mount verdict:' naming the exact filename and code path container-runner reads for additional mounts; group_mount_set writes that file format; a vitest test feeds a fixture group written by group_mount_set through the real reader function (materializeContainerJson/buildMounts code path, not a reimplementation) and asserts the mount appears; npx vitest run exits 0.",
+      "acceptance_checks": [
+        {
+          "id": "n4-verdict",
+          "kind": "shell",
+          "cmd": "grep -q 'N4 mount verdict:' .ralph/runs/2026-06-10-nanoclaw-admin-mcp-generic/PROGRESS.md",
+          "expect_exit": 0
+        },
+        {
+          "id": "n4-reader-coupled",
+          "kind": "shell",
+          "cmd": "grep -qE 'materializeContainerJson|buildMounts' src/admin-mcp.test.ts || grep -qErl 'group_mount_set' --include='*.test.ts' src/ | xargs grep -lE 'materializeContainerJson|buildMounts' | grep -q .",
+          "expect_exit": 0
+        },
+        {
+          "id": "n4-focused",
+          "kind": "shell",
+          "cmd": "npx vitest run src/admin-mcp.test.ts",
+          "expect_exit": 0
+        },
+        {
+          "id": "n4-suite",
+          "kind": "shell",
+          "cmd": "npx vitest run",
+          "expect_exit": 0
+        }
+      ],
+      "tasks": [
+        {
+          "id": "N4.1",
+          "title": "Determine the live mount-config reader and make group_mount_set write it",
+          "labels": [
+            "nanoclaw",
+            "refactor"
+          ],
+          "body": "Intent: PR #3 wrote container.json/additionalMounts while Pan's pipeline writes nanoclaw-config.json \u2014 two formats for one mount is a silent-divergence bug. One truth must win.\nAction: read src/container-runner.ts, src/container-config.ts, src/db/container-configs.ts (materializeContainerJson, buildMounts) and determine which on-disk file/DB row the spawn path ACTUALLY consumes for additional mounts. Change group_mount_set to write exactly that. Append ledger line 'N4 mount verdict: <filename/row + reader function + one-line why>'.\nOutput: group_mount_set writing the live format; verdict line in PROGRESS.md.\nDeps: N3.1."
+        },
+        {
+          "id": "N4.2",
+          "title": "Reader-coupled mount test",
+          "labels": [
+            "nanoclaw",
+            "tests"
+          ],
+          "body": "Intent: prove the verb's output is consumed by the real spawn-path reader so the formats can never fork again.\nAction: add a test (admin-mcp.test.ts or the container-config test file) that calls group_mount_set against a fixture group, then invokes the REAL reader function from the spawn path and asserts the readonly mount from sourceGroup appears in the resolved mounts. Do not reimplement the reader in the test.\nOutput: the test green in the focused run and the full suite.\nDeps: N4.1."
+        }
+      ]
+    },
+    {
+      "id": "N5",
+      "name": "Endpoint hardening: audit log, prefix scoping, rotation docs",
+      "acceptance": "Every tools/call emits an audit log line on success and on failure carrying tool name, target (group or channel+key), and outcome; phone values pass through redactPlatformId before logging and a test fails if redaction is removed; with NANOCLAW_ADMIN_MCP_GROUP_PREFIXES set, group-targeting verbs reject out-of-prefix groups; .env.example documents both NANOCLAW_ADMIN_MCP_TOKEN and NANOCLAW_ADMIN_MCP_GROUP_PREFIXES; README documents token rotation; PROGRESS.md carries 'N5 redaction proven red'; focused and full suites exit 0.",
+      "acceptance_checks": [
+        {
+          "id": "n5-redact-wired",
+          "kind": "grep",
+          "path": "src/admin-mcp.ts",
+          "pattern": "redactPlatformId",
+          "expect": true
+        },
+        {
+          "id": "n5-prefix-env",
+          "kind": "grep",
+          "path": ".env.example",
+          "pattern": "NANOCLAW_ADMIN_MCP_GROUP_PREFIXES",
+          "expect": true
+        },
+        {
+          "id": "n5-prefix-wired",
+          "kind": "grep",
+          "path": "src/admin-mcp.ts",
+          "pattern": "NANOCLAW_ADMIN_MCP_GROUP_PREFIXES",
+          "expect": true
+        },
+        {
+          "id": "n5-readme-rotation",
+          "kind": "shell",
+          "cmd": "grep -qi 'rotat' README.md",
+          "expect_exit": 0
+        },
+        {
+          "id": "n5-token-env",
+          "kind": "grep",
+          "path": ".env.example",
+          "pattern": "NANOCLAW_ADMIN_MCP_TOKEN",
+          "expect": true
+        },
+        {
+          "id": "n5-proven-red",
+          "kind": "shell",
+          "cmd": "grep -q 'N5 redaction proven red' .ralph/runs/2026-06-10-nanoclaw-admin-mcp-generic/PROGRESS.md",
+          "expect_exit": 0
+        },
+        {
+          "id": "n5-focused",
+          "kind": "shell",
+          "cmd": "npx vitest run src/admin-mcp.test.ts",
+          "expect_exit": 0
+        },
+        {
+          "id": "n5-suite",
+          "kind": "shell",
+          "cmd": "npx vitest run",
+          "expect_exit": 0
+        }
+      ],
+      "tasks": [
+        {
+          "id": "N5.1",
+          "title": "Audit logging with platform-id redaction",
+          "labels": [
+            "nanoclaw",
+            "security"
+          ],
+          "body": "Intent: this endpoint can replace an agent's system prompt; every call must leave an audit trail, and phone numbers must never land raw in logs (the PR already redacts elsewhere \u2014 extend the discipline here).\nAction: in the tools/call handler, log {tool, target, outcome:'ok'|'error: <msg>'} via the standard logger for BOTH success and failure; route any phone/address value through redactPlatformId. Tests: audit line emitted on success; emitted on failure; raw E.164 string absent from captured log output. Prove the redaction test red: temporarily bypass redactPlatformId, observe the test fail, restore, then append ledger line 'N5 redaction proven red \u2014 <failing test name>: <one-line failure excerpt>' (the evidence is mandatory; a bare line is fabrication).\nOutput: audit logging in src/admin-mcp.ts + 3 tests + the proven-red ledger line.\nDeps: N3.2."
+        },
+        {
+          "id": "N5.2",
+          "title": "Group-prefix scoping + token rotation docs",
+          "labels": [
+            "nanoclaw",
+            "security",
+            "docs"
+          ],
+          "body": "Intent: a leaked token should not grant writes to every group on the host; scoping shrinks the blast radius. Operators need a rotation procedure.\nAction: support env NANOCLAW_ADMIN_MCP_GROUP_PREFIXES (comma-separated); when set, group_put/group_file_get/group_file_put/group_mount_set/dm_register reject any groupName not matching a listed prefix (clear error, audited). Unset = no restriction (current behavior). Test: out-of-prefix call errors, in-prefix call succeeds. Document both envs in .env.example and add a README section on token rotation (generate, set both sides, restart, revoke).\nOutput: scoping logic + tests + .env.example/README updates.\nDeps: N5.1."
+        }
+      ]
+    },
+    {
+      "id": "N6",
+      "name": "Opt-in state machine + awareness seeding (awareness inversion core)",
+      "acceptance": "Control events persist an ISO-8601 'at'; dm_register with require_opt_in records registration time and dm_status reports activationState 'pending' until a control keyword with at strictly greater than registration time arrives, then 'active'; while pending or post-STOP suppressed, non-keyword inbound on that wiring produces no agent turn; activation writes a messages_in seed row for the owning agent; STOP on an active registration writes a turn-triggering messages_in row; START-after-STOP writes a trigger-0 row; outbound suppression behavior is byte-for-byte unchanged; src/sms-activation.test.ts covers all six scenarios and PROGRESS.md carries 'N6 freshness proven red'.",
+      "acceptance_checks": [
+        {
+          "id": "n6-test-file",
+          "kind": "file_exists",
+          "path": "src/sms-activation.test.ts"
+        },
+        {
+          "id": "n6-focused",
+          "kind": "shell",
+          "cmd": "npx vitest run src/sms-activation.test.ts",
+          "expect_exit": 0
+        },
+        {
+          "id": "n6-require-flag",
+          "kind": "grep",
+          "path": "src/admin-mcp.ts",
+          "pattern": "require_opt_in",
+          "expect": true
+        },
+        {
+          "id": "n6-proven-red",
+          "kind": "shell",
+          "cmd": "grep -q 'N6 freshness proven red' .ralph/runs/2026-06-10-nanoclaw-admin-mcp-generic/PROGRESS.md",
+          "expect_exit": 0
+        },
+        {
+          "id": "n6-suite",
+          "kind": "shell",
+          "cmd": "npx vitest run",
+          "expect_exit": 0
+        }
+      ],
+      "tasks": [
+        {
+          "id": "N6.1",
+          "title": "Control-event timestamps + dm_status enrichment",
+          "labels": [
+            "nanoclaw",
+            "sms"
+          ],
+          "body": "Intent: freshness comparisons and diagnostics need event times; today's store keeps only the latest keyword per number.\nAction: persist ISO-8601 'at' on every STOP/START/HELP control event written to data/sms-opt-outs.json (preserve backward compat reading entries without 'at'). dm_status returns lastControlEvent {keyword, at} and the computed activationState.\nOutput: timestamped store writes + dm_status surfacing them, with tests.\nDeps: N3.2."
+        },
+        {
+          "id": "N6.2",
+          "title": "Born-suppressed registrations: pending until fresh keyword",
+          "labels": [
+            "nanoclaw",
+            "sms"
+          ],
+          "body": "Intent: register-first inverts the PR's ordering \u2014 wiring exists from finalize, consent gates DELIVERY not registration. Freshness must be a harness fact: a keyword event older than the registration is a different consent episode.\nAction: dm_register with require_opt_in:true persists registration time and starts activationState 'pending'. On inbound START/YES for that address: transition to 'active' ONLY if the event 'at' is strictly greater than registration time; stale events leave it pending. Without require_opt_in, behavior is unchanged from the PR.\nOutput: the pending->active transition with the freshness comparison, unit-tested.\nDeps: N6.1."
+        },
+        {
+          "id": "N6.3",
+          "title": "Consent-leak guard: keywords only while not active",
+          "labels": [
+            "nanoclaw",
+            "sms",
+            "safety"
+          ],
+          "body": "Intent: pre-consent wiring must not let an unconsented teen trigger agent turns \u2014 that would trade a polling wart for a consent leak.\nAction: (owning module: src/channels/sms.ts \u2014 the /webhook/sms inbound path \u2014 plus the control-event handling it calls) while a require_opt_in registration is 'pending' (and while suppressed post-STOP), inbound on that wiring processes ONLY control keywords (STOP/START/HELP/YES); any other inbound is dropped (logged, redacted) and never routed to the session or triggers a turn.\nOutput: the inbound gate, unit-tested (non-keyword inbound while pending produces no agent turn and no messages_in routing).\nDeps: N6.2."
+        },
+        {
+          "id": "N6.4",
+          "title": "Awareness seeding via messages_in",
+          "labels": [
+            "nanoclaw",
+            "sms"
+          ],
+          "body": "Intent: enforcement stays at the delivery layer, but the owning agent must KNOW the channel state changed (else outreach scheduling and parent-agent communication drift from reality). Same primitive as the cold-open / ncl messages send --record path.\nAction: (owning module: src/channels/sms.ts \u2014 the /webhook/sms inbound path \u2014 plus the control-event handling it calls) on pending->active transition, seed the owning agent's session with a system message ('User sent START \u2014 SMS channel is now active'); on STOP arriving for an ACTIVE registration, seed a turn-triggering system message ('User sent STOP \u2014 channel suppressed; do not schedule outreach; inform the counterpart agent per your instructions'); on START re-activation after STOP, seed a trigger-0 context row. Reuse resolveSession/writeSessionMessage. Outbound suppression code paths are untouched.\nOutput: seeding wired into the control-event handler, unit-tested.\nDeps: N6.3."
+        },
+        {
+          "id": "N6.5",
+          "title": "Six-scenario activation test file + prove freshness red",
+          "labels": [
+            "nanoclaw",
+            "tests"
+          ],
+          "body": "Intent: pin the whole state machine in one place so later refactors cannot soften it.\nAction: src/sms-activation.test.ts covering: (1) keyword for an unregistered number seeds nothing and changes no state; (2) keyword OLDER than registration leaves 'pending'; (3) non-keyword inbound while pending triggers no agent turn; (4) fresh START flips pending->active AND writes the activation messages_in row; (5) STOP on active writes a turn-triggering messages_in row; (6) outbound suppression blocks sends regardless of seeding. Prove scenario-2 red: temporarily remove the freshness comparison, observe the test fail, restore, append ledger line 'N6 freshness proven red \u2014 <failing test name>: <one-line failure excerpt>' (evidence mandatory).\nOutput: src/sms-activation.test.ts green + the proven-red ledger line + full suite green.\nDeps: N6.4."
+        }
+      ]
+    },
+    {
+      "id": "N8",
+      "name": "Finish: docs, build, clean feature branch, draft PR",
+      "acceptance": "pnpm run build, pnpm run format:check, npx tsc --noEmit, and npx vitest run all exit 0; README.md and .env.example contain no pan-mcp or PAN_MCP strings; PROGRESS.md carries a line beginning 'N8 PR:' holding either the draft-PR URL or a blocked reason.",
+      "acceptance_checks": [
+        {
+          "id": "n8-build",
+          "kind": "shell",
+          "cmd": "pnpm run build",
+          "expect_exit": 0
+        },
+        {
+          "id": "n8-format",
+          "kind": "shell",
+          "cmd": "pnpm run format:check",
+          "expect_exit": 0
+        },
+        {
+          "id": "n8-suite",
+          "kind": "shell",
+          "cmd": "npx vitest run",
+          "expect_exit": 0
+        },
+        {
+          "id": "n8-no-old-name",
+          "kind": "shell",
+          "cmd": "grep -rn 'pan-mcp\\|PAN_MCP' README.md .env.example",
+          "expect_exit": 1
+        },
+        {
+          "id": "n8-pr-line",
+          "kind": "shell",
+          "cmd": "grep -q 'N8 PR:' .ralph/runs/2026-06-10-nanoclaw-admin-mcp-generic/PROGRESS.md",
+          "expect_exit": 0
+        }
+      ],
+      "tasks": [
+        {
+          "id": "N8.1",
+          "title": "Docs + rename sweep + release-grade verification",
+          "labels": [
+            "nanoclaw",
+            "docs"
+          ],
+          "body": "Intent: ship a reviewable branch with no stale naming and the same verification bar the original PR met.\nAction: update README.md and .env.example for the admin-mcp rename (endpoint, token, prefixes env, rotation section from N5.2); sweep remaining pan-mcp/PAN_MCP strings repo-wide outside .ralph/ (git grep). Run pnpm run build, pnpm run format:check, npx tsc --noEmit, npx vitest run.\nOutput: clean docs, all four commands exit 0.\nDeps: N6.5."
+        },
+        {
+          "id": "N8.2",
+          "title": "Clean feature branch + draft PR superseding #3",
+          "labels": [
+            "nanoclaw",
+            "release",
+            "EXTERNAL"
+          ],
+          "body": "Intent: hand the operator a reviewable draft PR with zero ralph scaffolding in the diff, crediting the original author.\nAction: create branch feature/sms-channel-generic at HEAD; on it, git rm -r .ralph && commit ('strip run scaffolding'); push origin feature/sms-channel-generic; gh pr create --repo Pan-Labs-Inc/nanoclaw --draft --base main --head feature/sms-channel-generic with body covering: the 7-verb contract table, supersedes-#3 statement crediting @bluemoon's SMS channel work, the N4 mount verdict, the N2 cherry-pick disposition, and the awareness-inversion summary. NEVER modify feature/sms-channel-panlabs and NEVER close PR #3 (operator calls). Then git checkout the run branch (ralph/2026-06-10-nanoclaw-admin-mcp-generic) BEFORE touching the ledger \u2014 never leave the worktree on the stripped feature branch. Append ledger line 'N8 PR: <url>' (or 'N8 PR: blocked \u2014 <reason>' if gh/creds unavailable).\nOutput: pushed clean branch + draft PR URL (or blocked reason) in PROGRESS.md.\nDeps: N8.1."
+        }
+      ]
+    }
+  ]
+}

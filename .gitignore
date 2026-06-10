@@ -39,3 +39,8 @@ groups/*
 .nanoclaw/
 
 agents-sdk-docs
+
+# ralph-kit per-run local state
+.ralph/runs/*/OVERNIGHT.md
+.ralph/runs/*/.timeout-pending
+.ralph/runs/*/ralph.config.local
