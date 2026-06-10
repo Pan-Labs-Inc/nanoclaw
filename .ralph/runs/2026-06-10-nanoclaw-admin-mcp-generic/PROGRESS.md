@@ -1,5 +1,5 @@
-STATUS: READY        <!-- READY | RUNNING | DONE | BLOCKED | STUCK -->
-CURRENT: N6-GATE   <!-- the step a fresh round works next; never skip ahead -->
+STATUS: RUNNING        <!-- READY | RUNNING | DONE | BLOCKED | STUCK -->
+CURRENT: N8.1   <!-- the step a fresh round works next; never skip ahead -->
 
 # 2026-06-10-nanoclaw-admin-mcp-generic build ledger
 
@@ -194,9 +194,9 @@ operator configs, and any OTHER run's dir. Targeted add only.
 N6 freshness proven red — "scenario 2: keyword older than registration leaves pending": expected inboundCalled to be false but received true when `>` changed to `>=` (sms.ts:435)
 
 ### N6-GATE — phase gate: Opt-in state machine + awareness seeding (awareness inversion core)
-- status: pending
+- status: done
 - rounds: 0
-- acceptance:
+- acceptance: see .ralph/runs/2026-06-10-nanoclaw-admin-mcp-generic/tests/N6-GATE.sh — phase N6 full suite (N1.1.sh, N2.1.sh, N3.x.sh, N4.x.sh, N5.x.sh, N6.x.sh, regression.sh) passes; at field present, activationState in admin-mcp.ts, resolveActivationState + seedControlEventAwareness in sms.ts, sms-activation.test.ts exists, freshness proven red, tsc clean, 488/488 vitest pass
 - handoff:
 
 ### N8.1 — Docs + rename sweep + release-grade verification
@@ -238,3 +238,4 @@ N6 freshness proven red — "scenario 2: keyword older than registration leaves 
 #16 N6.3 PASS — added resolveActivationState() to sms.ts; reads checkActivationState hook (injectable for tests) or falls back to opt-out store + dm-registrations.json; createSmsWebhookHandler now checks activationState after keyword handling — drops non-keyword inbound when 'pending' or 'suppressed' (log + empty TwiML, no onInbound call); added 2 tests to sms.test.ts (pending drops, suppressed drops); 33/33 sms tests pass, tsc clean; vitest runner; project test file: src/channels/sms.test.ts.
 #17 N6.4 PASS — added seedControlEvent injectable hook to SmsConfig; added seedControlEventAwareness() that determines transition (pending→active trigger-1, active→suppressed trigger-1, suppressed→active trigger-0) and seeds owning agent's session via getMessagingGroupByPlatform+getMessagingGroupAgents+resolveSession+writeSessionMessage (DB errors caught/warned); modified createSmsWebhookHandler to capture preControlState before keyword processing and pass it to seeding; added 3 tests (start+pending, stop+active, start+suppressed); 36/36 sms tests pass; tsc clean; vitest runner; project test file: src/channels/sms.test.ts.
 #18 N6.5 PASS — created src/sms-activation.test.ts with 6 scenarios using vi.mock(./config.js) to redirect DATA_DIR to a temp dir; scenario 2 uses real resolveActivationState (no injectable hook) and a file-system setup to pin the freshness comparison; proved freshness red: changing `>` to `>=` at sms.ts:435 caused scenario 2 to fail (expected inboundCalled false but received true); restored; 6/6 sms-activation tests pass, 488/488 full suite pass; vitest runner; project test file: src/sms-activation.test.ts.
+#19 N6-GATE PASS — fixed TS2554 in src/sms-activation.test.ts:59 (handler call missing { waitUntil: () => {} } second arg); ran N6-GATE.sh: all prose checks pass, full accumulated suite (N1.1..N6.5 + regression.sh) passes; 488/488 vitest; tsc clean; phase N6 prose acceptance verified.

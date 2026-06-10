@@ -16,12 +16,7 @@ vi.mock('./config.js', async () => {
 });
 
 import type { ChannelSetup } from './channels/adapter.js';
-import {
-  createSmsAdapter,
-  createSmsWebhookHandler,
-  setSmsOptOut,
-  type SmsConfig,
-} from './channels/sms.js';
+import { createSmsAdapter, createSmsWebhookHandler, setSmsOptOut, type SmsConfig } from './channels/sms.js';
 
 function optOutStorePath(): string {
   return path.join(TEST_DIR, 'data', 'sms-opt-outs.json');
@@ -67,6 +62,7 @@ async function sendInbound(
       body: params.toString(),
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     }),
+    { waitUntil: () => {} },
   );
 }
 
@@ -90,7 +86,11 @@ describe('SMS activation state machine — six scenarios', () => {
     let inboundCalled = false;
     const handler = createSmsWebhookHandler(
       baseConfig(), // no hooks — real resolveActivationState + real seeding path
-      hostSetup({ onInbound: async () => { inboundCalled = true; } }),
+      hostSetup({
+        onInbound: async () => {
+          inboundCalled = true;
+        },
+      }),
     );
 
     await sendInbound(handler, PHONE, 'START');
@@ -121,7 +121,11 @@ describe('SMS activation state machine — six scenarios', () => {
     let inboundCalled = false;
     const handler = createSmsWebhookHandler(
       baseConfig(), // no checkActivationState hook → real resolveActivationState
-      hostSetup({ onInbound: async () => { inboundCalled = true; } }),
+      hostSetup({
+        onInbound: async () => {
+          inboundCalled = true;
+        },
+      }),
     );
 
     await sendInbound(handler, PHONE, 'hello');
@@ -134,7 +138,11 @@ describe('SMS activation state machine — six scenarios', () => {
     const config = baseConfig({ checkActivationState: () => 'pending' });
     const handler = createSmsWebhookHandler(
       config,
-      hostSetup({ onInbound: async () => { inboundCalled = true; } }),
+      hostSetup({
+        onInbound: async () => {
+          inboundCalled = true;
+        },
+      }),
     );
 
     await sendInbound(handler, PHONE, 'hello, how are you?');
