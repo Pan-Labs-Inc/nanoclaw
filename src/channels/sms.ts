@@ -27,6 +27,7 @@ const TWILIO_ACCOUNT_SID_RE = /^AC[0-9a-fA-F]{32}$/;
 const TWILIO_MESSAGING_SERVICE_SID_RE = /^MG[0-9a-fA-F]{32}$/;
 const E164_PHONE_RE = /^\+[1-9]\d{7,14}$/;
 const SMS_OPT_OUT_STORE_MODE = 0o600;
+const DM_REGISTRATIONS_FILE = 'dm-registrations.json';
 const DEFAULT_STOP_REPLY =
   'You have been unsubscribed and will no longer receive SMS messages from this assistant. Reply START to resubscribe.';
 const DEFAULT_START_REPLY = 'You are opted in to SMS messages from this assistant. Reply STOP to opt out.';
@@ -47,6 +48,8 @@ export interface SmsConfig {
   helpMessage?: string;
   validateCredentials?: boolean;
   fetchImpl?: FetchLike;
+  /** Override activation state resolution for testing. Production uses the opt-out store + DM registrations file. */
+  checkActivationState?: (phone: string) => 'active' | 'pending' | 'suppressed';
 }
 
 export interface TwilioInbound {
@@ -407,6 +410,32 @@ export async function sendTwilioSms(config: SmsConfig, to: string, body: string)
   return json.sid;
 }
 
+/**
+ * Resolve the activation state for an inbound SMS sender.
+ * Uses the injectable `checkActivationState` if provided; otherwise reads the
+ * local opt-out store and DM registrations file from DATA_DIR.
+ */
+function resolveActivationState(phone: string, config: SmsConfig): 'active' | 'pending' | 'suppressed' {
+  if (config.checkActivationState) return config.checkActivationState(phone);
+  if (isSmsOptedOut(phone, config)) return 'suppressed';
+  try {
+    const file = path.join(DATA_DIR, DM_REGISTRATIONS_FILE);
+    if (!fs.existsSync(file)) return 'active';
+    const regs = JSON.parse(fs.readFileSync(file, 'utf-8')) as Record<
+      string,
+      { requireOptIn?: boolean; registeredAt?: string }
+    >;
+    const reg = regs[phone.trim()];
+    if (!reg?.requireOptIn) return 'active';
+    const event = getSmsControlEvent(phone, config);
+    const eventAt = event?.at ?? event?.receivedAt;
+    if (event?.action === 'start' && eventAt && eventAt > (reg.registeredAt ?? '')) return 'active';
+    return 'pending';
+  } catch {
+    return 'active';
+  }
+}
+
 /** Build the shared webhook handler for inbound SMS and Twilio delivery callbacks. */
 export function createSmsWebhookHandler(config: SmsConfig, hostConfig: ChannelSetup): WebhookHandler {
   return async (request) => {
@@ -436,6 +465,17 @@ export function createSmsWebhookHandler(config: SmsConfig, hostConfig: ChannelSe
     // NanoClaw only mirrors the state locally for outbound suppression.
     const control = handleSmsControlMessage(inbound.from, inbound.body, config, inbound.optOutType);
     if (control) return twimlResponse(control.reply);
+
+    // Consent-leak guard: drop non-keyword inbound while registration is pending
+    // (require_opt_in=true, no fresh START) or suppressed (post-STOP).
+    const activationState = resolveActivationState(inbound.from, config);
+    if (activationState !== 'active') {
+      log.info('SMS inbound dropped: consent gate', {
+        phone: redactSmsPhone(inbound.from),
+        activationState,
+      });
+      return twimlResponse();
+    }
 
     await hostConfig.onInbound(inbound.from, null, twilioInboundToMessage(inbound));
     return twimlResponse();

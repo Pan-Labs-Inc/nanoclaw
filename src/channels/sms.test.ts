@@ -842,6 +842,86 @@ describe('SMS webhook handler', () => {
     expect(received).toEqual([]);
   });
 
+  it('drops non-keyword inbound without calling onInbound when registration is pending', async () => {
+    const received: InboundMessage[] = [];
+    const storePath = optOutStorePath();
+    const config = baseConfig({
+      optOutStorePath: storePath,
+      checkActivationState: () => 'pending',
+    });
+    const params = new URLSearchParams({
+      MessageSid: 'SM200',
+      From: '+15551234567',
+      To: '+15557654321',
+      Body: 'hello, just checking in',
+    });
+    const url = 'http://localhost/webhook/sms';
+    const handler = createSmsWebhookHandler(
+      config,
+      setup({
+        onInbound(_platformId, _threadId, message) {
+          received.push(message);
+        },
+      }),
+    );
+
+    const response = await handler(
+      new Request(url, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/x-www-form-urlencoded',
+          'x-twilio-signature': signature(url, params),
+        },
+        body: params.toString(),
+      }),
+      { waitUntil: () => {} },
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe('<Response></Response>');
+    expect(received).toEqual([]);
+  });
+
+  it('drops non-keyword inbound without calling onInbound when registration is suppressed post-STOP', async () => {
+    const received: InboundMessage[] = [];
+    const storePath = optOutStorePath();
+    const config = baseConfig({
+      optOutStorePath: storePath,
+      checkActivationState: () => 'suppressed',
+    });
+    const params = new URLSearchParams({
+      MessageSid: 'SM201',
+      From: '+15551234567',
+      To: '+15557654321',
+      Body: 'are you there?',
+    });
+    const url = 'http://localhost/webhook/sms';
+    const handler = createSmsWebhookHandler(
+      config,
+      setup({
+        onInbound(_platformId, _threadId, message) {
+          received.push(message);
+        },
+      }),
+    );
+
+    const response = await handler(
+      new Request(url, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/x-www-form-urlencoded',
+          'x-twilio-signature': signature(url, params),
+        },
+        body: params.toString(),
+      }),
+      { waitUntil: () => {} },
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe('<Response></Response>');
+    expect(received).toEqual([]);
+  });
+
   it('honors Twilio Advanced Opt-Out type even for custom keyword bodies', async () => {
     const received: InboundMessage[] = [];
     const storePath = optOutStorePath();
