@@ -15,6 +15,7 @@ import { sanitizeTelegramLegacyMarkdown } from './telegram-markdown-sanitize.js'
 import { registerChannelAdapter } from './channel-registry.js';
 import type { ChannelAdapter, ChannelSetup, InboundMessage } from './adapter.js';
 import { tryConsume } from './telegram-pairing.js';
+import { tryActivateStartToken } from './telegram-start-token.js';
 
 /**
  * Retry a one-shot operation that can fail on transient network errors at
@@ -142,6 +143,31 @@ function isChatIdCommand(text: string, botUsername: string): boolean {
   return plain || addressed;
 }
 
+/**
+ * Confirm a successful /start-token activation. Best-effort — the agent's
+ * own greeting follows via the seeded awareness task; this just gives the
+ * user instant feedback that the tap worked.
+ */
+async function sendStartTokenConfirmation(token: string, platformId: string): Promise<void> {
+  const chatId = platformId.split(':').slice(1).join(':');
+  if (!chatId) return;
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: "You're connected! You'll get a message here shortly.",
+      }),
+    });
+    if (!res.ok) {
+      log.warn('Telegram start-token confirmation non-OK', { status: res.status });
+    }
+  } catch (err) {
+    log.warn('Telegram start-token confirmation failed', { err });
+  }
+}
+
 function createPairingInterceptor(
   botUsernamePromise: Promise<string | null>,
   hostOnInbound: ChannelSetup['onInbound'],
@@ -161,6 +187,17 @@ function createPairingInterceptor(
       }
       if (isChatIdCommand(text, botUsername)) {
         await sendChatIdReply(token, platformId);
+        return;
+      }
+      // Start-token activation (born-suppressed dm_register registrations).
+      // Checked before pairing: tokens are ≥8 chars so they can never collide
+      // with a 4-digit pairing code. On match the token message is consumed —
+      // it never reaches an agent; the seeded awareness task drives the greeting.
+      const activation = tryActivateStartToken({ text, botUsername, platformId });
+      if (activation) {
+        if (!activation.replay) {
+          await sendStartTokenConfirmation(token, platformId);
+        }
         return;
       }
       const consumed = await tryConsume({

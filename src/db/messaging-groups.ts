@@ -78,7 +78,11 @@ export function getMessagingGroupsByChannel(channelType: string): MessagingGroup
 
 export function updateMessagingGroup(
   id: string,
-  updates: Partial<Pick<MessagingGroup, 'name' | 'is_group' | 'unknown_sender_policy'>>,
+  // platform_id updates serve exactly one flow: Telegram start-token activation
+  // rebinding a born-suppressed placeholder (`telegram:<token>`) to the real
+  // chat id. UNIQUE(channel_type, platform_id) still applies — callers must
+  // check for an existing row first.
+  updates: Partial<Pick<MessagingGroup, 'name' | 'is_group' | 'unknown_sender_policy' | 'platform_id'>>,
 ): void {
   const fields: string[] = [];
   const values: Record<string, unknown> = { id };
