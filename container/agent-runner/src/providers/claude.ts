@@ -12,6 +12,7 @@ import {
   emitTracePayloads,
   parseTranscriptTurns,
   resolveLangfuseConfig,
+  resolveTraceUserId,
   type LangfuseConfig,
   type LangfuseLike,
   type SystemPromptFiles,
@@ -299,7 +300,7 @@ function readMaybe(file: string): string | undefined {
 function maybeEmitSystemPrompt(
   client: Langfuse,
   cfg: LangfuseConfig,
-  ctx: { sessionId: string; cwd?: string; localSettingEnabled: boolean },
+  ctx: { sessionId: string; cwd?: string; userId?: string; localSettingEnabled: boolean },
 ): void {
   if (cfg.logLevel === 'redacted' || !ctx.cwd) return;
   const files: SystemPromptFiles = {
@@ -309,7 +310,7 @@ function maybeEmitSystemPrompt(
   };
   const payload = buildSystemPromptPayload(
     files,
-    { sessionId: ctx.sessionId, environment: cfg.environment, logLevel: cfg.logLevel },
+    { sessionId: ctx.sessionId, userId: ctx.userId, environment: cfg.environment, logLevel: cfg.logLevel },
     { localSettingEnabled: ctx.localSettingEnabled },
   );
   if (!payload) return;
@@ -328,7 +329,7 @@ function maybeEmitSystemPrompt(
  */
 function createStopHook(
   env: Record<string, string | undefined>,
-  assistantName?: string,
+  identity: { assistantName?: string; traceUserId?: string } = {},
   localSettingEnabled = false,
 ): HookCallback {
   return async (input) => {
@@ -344,10 +345,19 @@ function createStopHook(
       const content = fs.readFileSync(transcriptPath, 'utf-8');
       const { turns, newOffset } = parseTranscriptTurns(content, startOffset);
 
+      // Explicit trace_user_id ships at every tier; the implicit agent-identity
+      // fallback stays gated to `full` — see resolveTraceUserId.
+      const userId = resolveTraceUserId({
+        traceUserId: identity.traceUserId,
+        logLevel: cfg.logLevel,
+        assistantName: identity.assistantName,
+        cwd,
+      });
+
       const client = getLangfuseClient(cfg);
       // The composed system prompt only changes at spawn, so capture it once, on
       // the session's first export. Independent of whether this batch had turns.
-      if (startOffset === 0) maybeEmitSystemPrompt(client, cfg, { sessionId, cwd, localSettingEnabled });
+      if (startOffset === 0) maybeEmitSystemPrompt(client, cfg, { sessionId, cwd, userId, localSettingEnabled });
 
       if (turns.length === 0) {
         writeOffset(transcriptPath, newOffset);
@@ -355,11 +365,6 @@ function createStopHook(
         return {};
       }
 
-      // The agent identity (e.g. a per-family group name) can be identifying, so
-      // it is gated to the `full` tier (test env). The default and `system` tiers
-      // group turns by sessionId alone — enough for per-session debugging without
-      // exporting a per-tenant identifier to Langfuse.
-      const userId = cfg.logLevel === 'full' ? assistantName || (cwd ? path.basename(cwd) : undefined) : undefined;
       const payloads = buildTracePayloads(turns, {
         sessionId,
         userId,
@@ -404,6 +409,7 @@ export class ClaudeProvider implements AgentProvider {
   readonly supportsNativeSlashCommands = true;
 
   private assistantName?: string;
+  private traceUserId?: string;
   private mcpServers: Record<string, McpServerConfig>;
   private env: Record<string, string | undefined>;
   private additionalDirectories?: string[];
@@ -412,6 +418,7 @@ export class ClaudeProvider implements AgentProvider {
 
   constructor(options: ProviderOptions = {}) {
     this.assistantName = options.assistantName;
+    this.traceUserId = options.traceUserId;
     this.mcpServers = options.mcpServers ?? {};
     this.additionalDirectories = options.additionalDirectories;
     this.model = options.model;
@@ -468,7 +475,7 @@ export class ClaudeProvider implements AgentProvider {
           PostToolUse: [{ hooks: [postToolUseHook] }],
           PostToolUseFailure: [{ hooks: [postToolUseHook] }],
           PreCompact: [{ hooks: [createPreCompactHook(this.assistantName)] }],
-          Stop: [{ hooks: [createStopHook(this.env, this.assistantName, settingSources.includes('local'))] }],
+          Stop: [{ hooks: [createStopHook(this.env, { assistantName: this.assistantName, traceUserId: this.traceUserId }, settingSources.includes('local'))] }],
         },
       },
     });

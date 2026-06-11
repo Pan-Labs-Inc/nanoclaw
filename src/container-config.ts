@@ -43,6 +43,9 @@ export interface ContainerConfig {
   maxMessagesPerPrompt?: number;
   model?: string;
   effort?: string;
+  /** Observability identity for traces (Langfuse userId). Operator-assigned
+   *  pseudonymous tenant key — see migration 016. */
+  traceUserId?: string;
 }
 
 /** Build a `ContainerConfig` from a DB row + agent group identity. */
@@ -63,6 +66,7 @@ export function configFromDb(row: ContainerConfigRow, group: AgentGroup): Contai
     maxMessagesPerPrompt: row.max_messages_per_prompt ?? undefined,
     model: row.model ?? undefined,
     effort: row.effort ?? undefined,
+    traceUserId: row.trace_user_id ?? undefined,
   };
 }
 

@@ -15,6 +15,7 @@ import { describe, it, expect } from 'bun:test';
 import {
   resolveLangfuseConfig,
   resolveLogLevel,
+  resolveTraceUserId,
   redact,
   parseTranscriptTurns,
   buildTracePayloads,
@@ -127,6 +128,32 @@ describe('resolveLogLevel — privacy tier', () => {
   });
   it('lets an explicit LOG_LEVEL win over the legacy alias', () => {
     expect(resolveLogLevel({ LANGFUSE_LOG_LEVEL: 'system', LANGFUSE_LOG_PROMPTS: '1' })).toBe('system');
+  });
+});
+
+describe('resolveTraceUserId — trace identity vs privacy tier', () => {
+  it('ships an explicit traceUserId at EVERY tier (operator-assigned config, not content)', () => {
+    for (const logLevel of ['redacted', 'system', 'full'] as const) {
+      expect(resolveTraceUserId({ traceUserId: 'kind-flame-2623a3-teen', logLevel })).toBe('kind-flame-2623a3-teen');
+    }
+  });
+  it('trims the explicit id and treats blank as absent', () => {
+    expect(resolveTraceUserId({ traceUserId: '  fid-teen ', logLevel: 'system' })).toBe('fid-teen');
+    expect(resolveTraceUserId({ traceUserId: '   ', logLevel: 'system', assistantName: 'pan-teen-x' })).toBeUndefined();
+  });
+  it('keeps the implicit agent-identity fallback gated to the full tier', () => {
+    expect(resolveTraceUserId({ logLevel: 'redacted', assistantName: 'pan-teen-x' })).toBeUndefined();
+    expect(resolveTraceUserId({ logLevel: 'system', assistantName: 'pan-teen-x' })).toBeUndefined();
+    expect(resolveTraceUserId({ logLevel: 'full', assistantName: 'pan-teen-x' })).toBe('pan-teen-x');
+  });
+  it('falls back to the workspace dir name at full when assistantName is absent', () => {
+    expect(resolveTraceUserId({ logLevel: 'full', cwd: '/workspace/group' })).toBe('group');
+    expect(resolveTraceUserId({ logLevel: 'full' })).toBeUndefined();
+  });
+  it('prefers the explicit id over the implicit identity at full', () => {
+    expect(
+      resolveTraceUserId({ traceUserId: 'fid-teen', logLevel: 'full', assistantName: 'pan-teen-x', cwd: '/w/g' }),
+    ).toBe('fid-teen');
   });
 });
 

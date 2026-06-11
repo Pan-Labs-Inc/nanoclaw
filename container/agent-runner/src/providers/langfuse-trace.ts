@@ -30,6 +30,8 @@
  * `LANGFUSE_LOG_PROMPTS=1` is kept as a back-compat alias for `full`.
  */
 
+import path from 'path';
+
 const DEFAULT_LANGFUSE_HOST = 'https://cloud.langfuse.com';
 
 // Langfuse environment names: lowercase letters/digits/-/_, ≤40 chars, must not
@@ -58,6 +60,31 @@ export function resolveLogLevel(env: Record<string, string | undefined>): LogLev
   if (raw === 'redacted' || raw === 'system' || raw === 'full') return raw;
   if (isTruthy(env.LANGFUSE_LOG_PROMPTS)) return 'full';
   return 'redacted';
+}
+
+/**
+ * Resolve the trace `userId`.
+ *
+ * An explicit `traceUserId` (container-config `trace_user_id` — e.g. Pan sets
+ * `{family_id}-{dyad}`, matching its PostHog distinct_id) is operator-assigned,
+ * pseudonymous *config*, not conversation content, so it ships at every tier:
+ * without it the prod tiers have no per-user axis at all.
+ *
+ * Absent that, fall back to the implicit agent identity (assistantName, then
+ * the workspace dir name). That can expose a per-tenant naming scheme the
+ * operator never opted into, so it stays gated to the `full` tier (test env),
+ * as before.
+ */
+export function resolveTraceUserId(opts: {
+  traceUserId?: string;
+  logLevel: LogLevel;
+  assistantName?: string;
+  cwd?: string;
+}): string | undefined {
+  const explicit = opts.traceUserId?.trim();
+  if (explicit) return explicit;
+  if (opts.logLevel !== 'full') return undefined;
+  return opts.assistantName || (opts.cwd ? path.basename(opts.cwd) : undefined);
 }
 
 /** Resolved Langfuse configuration, derived once from the container env. */

@@ -31,7 +31,11 @@ import {
   createPendingQuestion,
   getPendingQuestion,
   deletePendingQuestion,
+  ensureContainerConfig,
+  getContainerConfig,
+  updateContainerConfigScalars,
 } from './index.js';
+import { configFromDb } from '../container-config.js';
 
 function now() {
   return new Date().toISOString();
@@ -272,6 +276,37 @@ describe('messaging group agents', () => {
       .map((d) => d.local_name)
       .sort();
     expect(dests).toEqual(['gen', 'gen-2']);
+  });
+});
+
+// ── Container configs ──
+
+describe('container configs — trace_user_id', () => {
+  beforeEach(() => {
+    createAgentGroup({
+      id: 'ag-cc',
+      name: 'pan-teen-kind-flame-2623a3',
+      folder: 'pan-teen-kind-flame-2623a3',
+      agent_provider: null,
+      created_at: now(),
+    });
+  });
+
+  it('defaults to NULL on an ensured row and round-trips through the scalar update', () => {
+    ensureContainerConfig('ag-cc');
+    expect(getContainerConfig('ag-cc')!.trace_user_id).toBeNull();
+
+    updateContainerConfigScalars('ag-cc', { trace_user_id: 'kind-flame-2623a3-teen' });
+    expect(getContainerConfig('ag-cc')!.trace_user_id).toBe('kind-flame-2623a3-teen');
+  });
+
+  it('materializes as traceUserId in the container config (and is omitted when NULL)', () => {
+    ensureContainerConfig('ag-cc');
+    const group = getAgentGroup('ag-cc')!;
+    expect(configFromDb(getContainerConfig('ag-cc')!, group).traceUserId).toBeUndefined();
+
+    updateContainerConfigScalars('ag-cc', { trace_user_id: 'kind-flame-2623a3-teen' });
+    expect(configFromDb(getContainerConfig('ag-cc')!, group).traceUserId).toBe('kind-flame-2623a3-teen');
   });
 });
 
