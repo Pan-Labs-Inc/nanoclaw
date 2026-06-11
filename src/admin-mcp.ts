@@ -26,9 +26,9 @@ import { namespacedPlatformId } from './platform-id.js';
 import { redactPlatformId } from './platform-redaction.js';
 import { resolveSession, writeSessionMessage } from './session-manager.js';
 import { registerWebhookHandler } from './webhook-server.js';
+import { readDmRegistrations, writeDmRegistrations } from './dm-registrations.js';
 
 const ENDPOINT_NAME = 'admin-mcp';
-const DM_REGISTRATIONS_FILE = 'dm-registrations.json';
 const SMS_OPT_OUT_STORE_FILE = 'sms-opt-outs.json';
 
 type JsonRpcRequest = {
@@ -39,14 +39,6 @@ type JsonRpcRequest = {
 };
 
 type ToolHandler = (args: Record<string, unknown>) => unknown | Promise<unknown>;
-
-type DmRegistration = {
-  groupName: string;
-  channel: string;
-  address: string;
-  registeredAt: string;
-  requireOptIn: boolean;
-};
 
 const toolHandlers: Record<string, ToolHandler> = {
   group_put: groupPutTool,
@@ -373,11 +365,15 @@ function dmStatusTool(args: Record<string, unknown>) {
   const address = stringArg(args, 'address');
   const platformId = namespacedPlatformId(channel, address);
 
-  const messagingGroup = getMessagingGroupByPlatform(channel, platformId);
-  if (!messagingGroup) return { registered: false, activationState: null, lastControlEvent: null };
-
   const regs = readDmRegistrations();
   const reg = regs[platformId];
+
+  // Born-suppressed Telegram registrations rebind the messaging group from the
+  // start-token placeholder to the real chat platformId at activation — follow
+  // the binding so status-by-token keeps working after the rebind.
+  const mgPlatformId = reg?.boundPlatformId ?? platformId;
+  const messagingGroup = getMessagingGroupByPlatform(channel, mgPlatformId);
+  if (!messagingGroup) return { registered: false, activationState: null, lastControlEvent: null };
 
   let lastControlEvent: { keyword: string; at: string } | null = null;
   let activationState: 'pending' | 'active' | 'suppressed' = 'active';
@@ -397,27 +393,15 @@ function dmStatusTool(args: Record<string, unknown>) {
       activationState = hasActivatingEvent ? 'active' : 'pending';
     }
   } else if (reg?.requireOptIn) {
-    activationState = 'pending';
+    if (reg.activatedAt) {
+      activationState = 'active';
+      lastControlEvent = { keyword: 'start', at: reg.activatedAt };
+    } else {
+      activationState = 'pending';
+    }
   }
 
   return { registered: true, activationState, lastControlEvent };
-}
-
-function readDmRegistrations(): Record<string, DmRegistration> {
-  const file = path.join(DATA_DIR, DM_REGISTRATIONS_FILE);
-  if (!fs.existsSync(file)) return {};
-  try {
-    const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, DmRegistration>;
-    return parsed && typeof parsed === 'object' ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
-function writeDmRegistrations(regs: Record<string, DmRegistration>): void {
-  const file = path.join(DATA_DIR, DM_REGISTRATIONS_FILE);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, `${JSON.stringify(regs, null, 2)}\n`, 'utf8');
 }
 
 function readSmsOptOutStore(): {

@@ -1,0 +1,48 @@
+/**
+ * dm-registrations store — registration metadata written by admin-MCP
+ * dm_register and read by dm_status and the channel activation state
+ * machines (data/dm-registrations.json).
+ *
+ * Keyed by the namespaced platformId at registration time. For
+ * born-suppressed Telegram registrations the key is the start-token
+ * placeholder (`telegram:<token>`): the real chat id is unknown until the
+ * user taps the deep link, so activation rebinds the messaging group to the
+ * real chat platformId and records it here as `boundPlatformId`. The
+ * registration key itself stays stable so dm_status lookups by token keep
+ * working after activation.
+ */
+import fs from 'fs';
+import path from 'path';
+
+import { DATA_DIR } from './config.js';
+
+export const DM_REGISTRATIONS_FILE = 'dm-registrations.json';
+
+export type DmRegistration = {
+  groupName: string;
+  channel: string;
+  address: string;
+  registeredAt: string;
+  requireOptIn: boolean;
+  /** Stamped when a born-suppressed registration is activated (Telegram /start token). */
+  activatedAt?: string;
+  /** Real platform id the messaging group was rebound to at activation. */
+  boundPlatformId?: string;
+};
+
+export function readDmRegistrations(): Record<string, DmRegistration> {
+  const file = path.join(DATA_DIR, DM_REGISTRATIONS_FILE);
+  if (!fs.existsSync(file)) return {};
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, DmRegistration>;
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+export function writeDmRegistrations(regs: Record<string, DmRegistration>): void {
+  const file = path.join(DATA_DIR, DM_REGISTRATIONS_FILE);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, `${JSON.stringify(regs, null, 2)}\n`, 'utf8');
+}
