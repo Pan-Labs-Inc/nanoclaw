@@ -22,6 +22,12 @@ export interface AgentProvider {
  */
 export interface ProviderOptions {
   assistantName?: string;
+  /**
+   * Observability identity for traces (container-config `trace_user_id`).
+   * Operator-assigned pseudonymous tenant key; ships as the Langfuse `userId`
+   * at every log tier — see resolveTraceUserId in langfuse-trace.ts.
+   */
+  traceUserId?: string;
   mcpServers?: Record<string, McpServerConfig>;
   env?: Record<string, string | undefined>;
   additionalDirectories?: string[];

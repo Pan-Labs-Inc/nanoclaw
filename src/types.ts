@@ -25,6 +25,7 @@ export interface ContainerConfigRow {
   packages_npm: string; // JSON: string[]
   additional_mounts: string; // JSON: AdditionalMountConfig[]
   cli_scope: string; // 'disabled' | 'group' | 'global'
+  trace_user_id: string | null; // observability identity (Langfuse userId); pseudonymous tenant key, not content
   updated_at: string;
 }
 
