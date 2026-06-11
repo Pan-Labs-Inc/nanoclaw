@@ -62,7 +62,8 @@ const toolDescriptions: Record<string, string> = {
   group_put: 'Atomically create or replace a NanoClaw group directory.',
   group_file_get: 'Read a file from a NanoClaw group directory, returning base64-encoded content.',
   group_file_put: 'Atomically write a file into a NanoClaw group directory.',
-  group_mount_set: 'Write the additional-mounts container config for a group.',
+  group_mount_set:
+    'Write the additional-mounts container config for a group. Each mount entry may set sourcePath (relative, no traversal) to mount a subdirectory of the source group instead of the whole group dir.',
   dm_register: 'Wire a channel address as a NanoClaw direct-message group.',
   shared_base_write: 'Compose content into container/CLAUDE.md at a marker point.',
   dm_status: 'Read the activation state and last control event for a registered DM address.',
@@ -247,10 +248,13 @@ function groupMountSetTool(args: Record<string, unknown>) {
     const mount = m as Record<string, unknown>;
     const sourceGroup = stringArg(mount, 'sourceGroup');
     if (!isValidGroupFolder(sourceGroup)) throw new Error(`Invalid source group folder: ${sourceGroup}`);
+    const sourcePath = optionalStringArg(mount, 'sourcePath');
     const containerPath = stringArg(mount, 'containerPath');
     const readonly = booleanArg(mount, 'readonly', true);
     return {
-      hostPath: path.join(GROUPS_DIR, sourceGroup),
+      hostPath: sourcePath
+        ? path.join(GROUPS_DIR, sourceGroup, safeRelativePath(sourcePath))
+        : path.join(GROUPS_DIR, sourceGroup),
       containerPath,
       readonly,
     };

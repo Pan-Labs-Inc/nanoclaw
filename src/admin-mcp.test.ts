@@ -280,6 +280,61 @@ describe('Admin MCP endpoint', () => {
       expect(found!.readonly).toBe(true);
       expect(found!.hostPath).toContain('mountsrc');
     });
+
+    it('sourcePath mounts a subdirectory of the source group (materializeContainerJson)', async () => {
+      const handler = createAdminMcpHandler({ token: TOKEN });
+      await callTool(handler, 'group_put', { groupName: 'subdest', files: [], force: false });
+      await callTool(handler, 'group_put', { groupName: 'subsrc', files: [], force: false });
+
+      const res = await callTool(handler, 'group_mount_set', {
+        groupName: 'subdest',
+        mounts: [
+          { sourceGroup: 'subsrc', sourcePath: 'pan', containerPath: '/workspace/group/pan', readonly: true },
+        ],
+      });
+      expect(res.status).toBe(200);
+
+      const agentGroup = getAgentGroupByFolder('subdest');
+      expect(agentGroup).toBeDefined();
+
+      const config = materializeContainerJson(agentGroup!.id);
+      const found = config.additionalMounts.find((m) => m.containerPath === '/workspace/group/pan');
+      expect(found).toBeDefined();
+      expect(found!.readonly).toBe(true);
+      expect(found!.hostPath).toMatch(/subsrc[/\\]pan$/);
+    });
+
+    it('rejects a sourcePath that escapes the source group dir', async () => {
+      const handler = createAdminMcpHandler({ token: TOKEN });
+      await callTool(handler, 'group_put', { groupName: 'escdest', files: [], force: false });
+      await callTool(handler, 'group_put', { groupName: 'escsrc', files: [], force: false });
+
+      const res = await callTool(handler, 'group_mount_set', {
+        groupName: 'escdest',
+        mounts: [
+          { sourceGroup: 'escsrc', sourcePath: 'pan/../../other', containerPath: '/workspace/x', readonly: true },
+        ],
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as McpBody;
+      expect(body.error).toBeDefined();
+      expect(body.error!.message).toMatch(/escapes group dir/i);
+    });
+
+    it('rejects an absolute sourcePath', async () => {
+      const handler = createAdminMcpHandler({ token: TOKEN });
+      await callTool(handler, 'group_put', { groupName: 'absdest', files: [], force: false });
+      await callTool(handler, 'group_put', { groupName: 'abssrc', files: [], force: false });
+
+      const res = await callTool(handler, 'group_mount_set', {
+        groupName: 'absdest',
+        mounts: [{ sourceGroup: 'abssrc', sourcePath: '/etc', containerPath: '/workspace/x', readonly: true }],
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as McpBody;
+      expect(body.error).toBeDefined();
+      expect(body.error!.message).toMatch(/must be relative/i);
+    });
   });
 
   describe('dm_register', () => {
