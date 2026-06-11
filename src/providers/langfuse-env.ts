@@ -15,8 +15,11 @@
  * a live-but-broken exporter.
  *
  * Prompt/response *content* stays OFF by default (Pan's prompts carry teen
- * conversation data). The hook redacts content unless LANGFUSE_LOG_PROMPTS is
- * opted in; we forward that flag so the operator controls it from .env.
+ * conversation data). The hook's three-tier dial, LANGFUSE_LOG_LEVEL
+ * (redacted | system | full), and its legacy boolean alias LANGFUSE_LOG_PROMPTS
+ * (truthy ⇒ full) are both forwarded so the operator controls exposure from
+ * .env. Anything the hook wouldn't recognise is dropped here, so the container
+ * always falls back to `redacted`.
  */
 
 const DEFAULT_LANGFUSE_HOST = 'https://cloud.langfuse.com';
@@ -38,7 +41,8 @@ function isTruthy(value: string | undefined): boolean {
  * Returns `{}` (no-op) unless LANGFUSE_ENABLED is truthy *and* both keys are
  * present. Otherwise forwards the credentials the in-container Stop hook reads:
  * LANGFUSE_ENABLED, LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY, LANGFUSE_HOST,
- * plus optional LANGFUSE_ENVIRONMENT (validated) and LANGFUSE_LOG_PROMPTS.
+ * plus optional LANGFUSE_ENVIRONMENT (validated), LANGFUSE_LOG_LEVEL
+ * (validated tier), and LANGFUSE_LOG_PROMPTS.
  */
 export function buildLangfuseContainerEnv(env: Record<string, string | undefined>): Record<string, string> {
   if (!isTruthy(env.LANGFUSE_ENABLED)) return {};
@@ -63,6 +67,14 @@ export function buildLangfuseContainerEnv(env: Record<string, string | undefined
 
   if (isTruthy(env.LANGFUSE_LOG_PROMPTS)) {
     out.LANGFUSE_LOG_PROMPTS = '1';
+  }
+
+  // Forward the privacy-tier dial, normalised the same way the in-container
+  // hook's resolveLogLevel reads it. Invalid values are dropped rather than
+  // forwarded so the container's safe `redacted` default applies.
+  const logLevel = env.LANGFUSE_LOG_LEVEL?.trim().toLowerCase();
+  if (logLevel === 'redacted' || logLevel === 'system' || logLevel === 'full') {
+    out.LANGFUSE_LOG_LEVEL = logLevel;
   }
 
   return out;

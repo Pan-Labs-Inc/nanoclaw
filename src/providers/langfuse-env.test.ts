@@ -95,3 +95,28 @@ describe('buildLangfuseContainerEnv — prompt-content privacy', () => {
     expect(buildLangfuseContainerEnv({ ...KEYS, LANGFUSE_LOG_PROMPTS: '1' }).LANGFUSE_LOG_PROMPTS).toBe('1');
   });
 });
+
+// Regression guard for the dead-dial bug (Pan #712): the host .env carried
+// LANGFUSE_LOG_LEVEL=full but the container hook's resolveLogLevel never saw it
+// because this function silently dropped the var — every observation stayed
+// `[redacted]` regardless of the operator's setting.
+describe('buildLangfuseContainerEnv — LANGFUSE_LOG_LEVEL forwarding (Pan #712)', () => {
+  it('omits LANGFUSE_LOG_LEVEL when unset', () => {
+    expect(buildLangfuseContainerEnv(KEYS).LANGFUSE_LOG_LEVEL).toBeUndefined();
+  });
+
+  it('forwards each valid tier so the in-container hook sees the dial', () => {
+    for (const tier of ['redacted', 'system', 'full']) {
+      expect(buildLangfuseContainerEnv({ ...KEYS, LANGFUSE_LOG_LEVEL: tier }).LANGFUSE_LOG_LEVEL).toBe(tier);
+    }
+  });
+
+  it('normalises case and whitespace to match resolveLogLevel', () => {
+    expect(buildLangfuseContainerEnv({ ...KEYS, LANGFUSE_LOG_LEVEL: ' Full ' }).LANGFUSE_LOG_LEVEL).toBe('full');
+  });
+
+  it('drops an unrecognised tier (container falls back to redacted)', () => {
+    expect(buildLangfuseContainerEnv({ ...KEYS, LANGFUSE_LOG_LEVEL: 'verbose' }).LANGFUSE_LOG_LEVEL).toBeUndefined();
+    expect(buildLangfuseContainerEnv({ ...KEYS, LANGFUSE_LOG_LEVEL: '' }).LANGFUSE_LOG_LEVEL).toBeUndefined();
+  });
+});
