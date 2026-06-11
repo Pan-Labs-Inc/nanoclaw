@@ -69,6 +69,15 @@ export interface ResourceDef {
   };
   /** Non-standard verbs (grant, revoke, add, remove, restart, etc.). */
   customOperations?: Record<string, CustomOperation>;
+  /**
+   * Optional side effect run immediately after a successful `create` INSERT,
+   * inside the same call. Receives the inserted row values (including the
+   * resolved id). Used to seed dependent rows that the bare INSERT does not —
+   * e.g. `groups` seeds an empty `container_configs` row so spawn-time
+   * `materializeContainerJson` finds it (a `groups create` that left it empty
+   * was a silent spawn failure). Must be idempotent.
+   */
+  afterCreate?: (values: Record<string, unknown>) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -133,7 +142,27 @@ function genericCreate(def: ResourceDef) {
     for (const col of def.columns) {
       if (col.generated) {
         if (col.name === def.idColumn) {
-          values[col.name] = randomUUID();
+          // The id column is normally auto-minted, but a caller MAY supply one
+          // (e.g. `ncl groups create --id ag-...`). NanoClaw's own
+          // `randomUUID()` ids can start with a digit, which OneCLI's gateway
+          // identifier validation rejects at container-spawn time — a silent
+          // failure mode. So when a caller supplies an id we hold it to the
+          // gateway rule: 1–50 chars, leading lowercase letter, then lowercase
+          // letters / digits / hyphens. (Pan supplies its own letter-leading
+          // `ag-${ts}-${slug}` id for exactly this reason.)
+          const supplied = args[col.name];
+          if (supplied !== undefined && supplied !== null && supplied !== '') {
+            const id = String(supplied);
+            if (!/^[a-z][a-z0-9-]{0,49}$/.test(id)) {
+              throw new Error(
+                `--${col.name} must be 1-50 chars, start with a lowercase letter, ` +
+                  `and contain only lowercase letters, digits, and hyphens`,
+              );
+            }
+            values[col.name] = id;
+          } else {
+            values[col.name] = randomUUID();
+          }
         } else if (col.name.endsWith('_at')) {
           values[col.name] = new Date().toISOString();
         }
@@ -158,6 +187,7 @@ function genericCreate(def: ResourceDef) {
     getDb()
       .prepare(`INSERT INTO ${def.table} (${colNames.join(', ')}) VALUES (${placeholders.join(', ')})`)
       .run(values);
+    def.afterCreate?.(values);
     return values;
   };
 }

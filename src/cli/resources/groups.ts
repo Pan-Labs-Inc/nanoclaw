@@ -5,6 +5,7 @@ import { getSession } from '../../db/sessions.js';
 import { writeSessionMessage } from '../../session-manager.js';
 import {
   getContainerConfig,
+  ensureContainerConfig,
   updateContainerConfigScalars,
   updateContainerConfigJson,
 } from '../../db/container-configs.js';
@@ -41,7 +42,13 @@ registerResource({
   idColumn: 'id',
   scopeField: 'id',
   columns: [
-    { name: 'id', type: 'string', description: 'UUID.', generated: true },
+    {
+      name: 'id',
+      type: 'string',
+      description:
+        'Group id. Auto-minted if omitted; a caller may supply one (e.g. a letter-leading ag-... id that passes OneCLI gateway validation).',
+      generated: true,
+    },
     {
       name: 'name',
       type: 'string',
@@ -59,6 +66,11 @@ registerResource({
     { name: 'created_at', type: 'string', description: 'Auto-set.', generated: true },
   ],
   operations: { list: 'open', get: 'open', create: 'approval', update: 'approval', delete: 'approval' },
+  // A bare `agent_groups` INSERT leaves `container_configs` empty, and
+  // spawn-time `materializeContainerJson` reads that row BEFORE buildMounts
+  // runs the self-healing `initGroupFilesystem` — so an un-seeded group dies
+  // silently at spawn. Seed an empty (idempotent) config row at create time.
+  afterCreate: (values) => ensureContainerConfig(values.id as string),
   customOperations: {
     restart: {
       access: 'approval',

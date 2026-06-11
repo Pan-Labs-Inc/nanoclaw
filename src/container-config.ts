@@ -12,7 +12,7 @@ import fs from 'fs';
 import path from 'path';
 
 import { GROUPS_DIR } from './config.js';
-import { getContainerConfig } from './db/container-configs.js';
+import { getContainerConfig, ensureContainerConfig } from './db/container-configs.js';
 import { getAgentGroup } from './db/agent-groups.js';
 import type { AgentGroup, ContainerConfigRow } from './types.js';
 
@@ -79,7 +79,16 @@ export function materializeContainerJson(agentGroupId: string): ContainerConfig 
   const group = getAgentGroup(agentGroupId);
   if (!group) throw new Error(`Agent group not found: ${agentGroupId}`);
 
-  const row = getContainerConfig(agentGroupId);
+  // Self-heal: a group created without a container_configs row (e.g. an older
+  // `ncl groups create`, or a row that pre-dates the afterCreate seed) would
+  // otherwise die HERE at spawn — before buildMounts runs the self-healing
+  // initGroupFilesystem. Seed an empty (idempotent) row and re-read so spawn
+  // proceeds with sensible defaults instead of throwing.
+  let row = getContainerConfig(agentGroupId);
+  if (!row) {
+    ensureContainerConfig(agentGroupId);
+    row = getContainerConfig(agentGroupId);
+  }
   if (!row) throw new Error(`Container config not found for agent group: ${agentGroupId}`);
 
   const config = configFromDb(row, group);
