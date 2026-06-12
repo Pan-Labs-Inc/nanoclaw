@@ -4,7 +4,17 @@ import path from 'node:path';
 import type { MessageInRow } from '../db/messages-in.js';
 import { touchHeartbeat } from '../db/connection.js';
 
-const SCRIPT_TIMEOUT_MS = 30_000;
+// Pre-task scripts default to a 10-minute ceiling, overridable via
+// TASK_SCRIPT_TIMEOUT_MS (milliseconds). A pre-task script does real work before
+// deciding whether to wake the agent — e.g. a synthesis/projection sweep that
+// runs synchronously here so the poll loop is blocked (no concurrent agent turn)
+// while it completes. 10 min is a generous ceiling for that; anything longer is
+// stuck, and the host sweep's absolute idle ceiling (30 min) is the backstop.
+// A non-numeric or non-positive override falls back to the default.
+export function resolveScriptTimeoutMs(): number {
+  const raw = Number(process.env.TASK_SCRIPT_TIMEOUT_MS);
+  return Number.isFinite(raw) && raw > 0 ? raw : 600_000;
+}
 const SCRIPT_MAX_BUFFER = 1024 * 1024;
 
 export interface ScriptResult {
@@ -24,7 +34,7 @@ export async function runScript(script: string, taskId: string): Promise<ScriptR
     execFile(
       'bash',
       [scriptPath],
-      { timeout: SCRIPT_TIMEOUT_MS, maxBuffer: SCRIPT_MAX_BUFFER, env: process.env },
+      { timeout: resolveScriptTimeoutMs(), maxBuffer: SCRIPT_MAX_BUFFER, env: process.env },
       (error, stdout, stderr) => {
         try {
           fs.unlinkSync(scriptPath);
