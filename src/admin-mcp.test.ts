@@ -18,7 +18,7 @@ vi.mock('./config.js', async () => {
 
 import { closeDb, initTestDb, runMigrations } from './db/index.js';
 import { getContainerConfig } from './db/container-configs.js';
-import { getAgentGroupByFolder } from './db/agent-groups.js';
+import { getAgentGroupByFolder, createAgentGroup } from './db/agent-groups.js';
 import { materializeContainerJson } from './container-config.js';
 import { createAdminMcpHandler } from './admin-mcp.js';
 
@@ -690,5 +690,30 @@ describe('Admin MCP endpoint', () => {
       const result = await toolResult(res);
       expect(result.activationState).toBe('pending');
     });
+  });
+});
+
+describe('materializeContainerJson — self-heals a missing container_configs row', () => {
+  it('seeds the row instead of throwing when an agent group has none', () => {
+    // Simulate a group created without a container_configs row (e.g. an older
+    // `ncl groups create`, before the afterCreate seed) — agent_groups only.
+    const id = 'ag-1700000002-aaa111';
+    createAgentGroup({
+      id,
+      name: 'Legacy Teen',
+      folder: 'pan-teen-legacy-aa11bb',
+      agent_provider: null,
+      created_at: new Date().toISOString(),
+    });
+
+    expect(getContainerConfig(id)).toBeUndefined();
+
+    // Spawn-time materialize must NOT throw — it heals the row and proceeds.
+    expect(() => materializeContainerJson(id)).not.toThrow();
+    expect(getContainerConfig(id)).toBeDefined();
+  });
+
+  it('still throws for an agent group that does not exist at all', () => {
+    expect(() => materializeContainerJson('ag-does-not-exist')).toThrow(/Agent group not found/i);
   });
 });
