@@ -7,6 +7,7 @@
  * in the frame — it's filled in by whichever server-side adapter received
  * the bytes (see CallerContext).
  */
+import type BetterSqlite3Database from 'better-sqlite3';
 
 export type RequestFrame = {
   /** Correlation key set by the client. */
@@ -42,4 +43,12 @@ export type CallerContext =
       sessionId: string;
       agentGroupId: string;
       messagingGroupId: string;
+      /**
+       * The caller's session inbound DB, threaded by the DB (cli_request)
+       * transport so a host-side handler can write a row scoped to the caller's
+       * own session — e.g. schedule a task into that session's `messages_in`.
+       * Absent on the socket transport (host `bin/ncl`): a command that needs it
+       * must reject a DB-less caller. Type-only import (erased at runtime).
+       */
+      inDb?: BetterSqlite3Database.Database;
     };

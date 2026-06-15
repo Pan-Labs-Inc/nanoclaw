@@ -14,3 +14,4 @@ import './dropped-messages.js';
 import './approvals.js';
 import './sessions.js';
 import './messages.js';
+import './scheduling.js';

@@ -30,6 +30,9 @@ registerDeliveryAction('cli_request', async (content, session, inDb) => {
     sessionId: session.id,
     agentGroupId: session.agent_group_id,
     messagingGroupId: session.messaging_group_id ?? '',
+    // Thread the caller's session inbound DB so a host-side command can write a
+    // session-scoped row (e.g. `task schedule` inserts into this messages_in).
+    inDb,
   };
 
   log.info('CLI request from agent', { requestId, command, sessionId: session.id });
