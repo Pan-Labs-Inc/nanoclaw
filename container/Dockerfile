@@ -147,7 +147,11 @@ RUN mkdir -p /workspace/group /workspace/extra && \
     chmod 777 /home/node
 
 USER node
-WORKDIR /workspace/group
+# Match the agent-runner's own cwd (index.ts CWD='/workspace/agent', the bind-mounted
+# group dir). Pre-task scripts (e.g. the slow-lane projector sweep) inherit this WORKDIR
+# and resolve their group/dyad context from it via .pan-group-name; the stale
+# /workspace/group (an empty baked dir, nothing mounts there) left them context-less.
+WORKDIR /workspace/agent
 
 # tini is PID 1, reaps zombies, forwards signals cleanly. entrypoint.sh does
 # `exec bun ...` so bun runs as tini's direct child.
