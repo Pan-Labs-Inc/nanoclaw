@@ -19,12 +19,19 @@
  *    egress runs through the OneCLI gateway, so the Langfuse host must be
  *    reachable through that proxy with its Authorization header left intact.
  *
+ * 3. PostHog product analytics. When POSTHOG_API_KEY is set, forward the PostHog
+ *    credentials into the container (see ./posthog-env.ts). The shipping itself
+ *    is Pan's in-container drain on the slow projection lane (ADR 030) — without
+ *    this passthrough the drain's `POSTHOG_API_KEY` gate is never satisfied and
+ *    the whole telemetry leg silently goes dark (Pan #961).
+ *
  * This module is imported unconditionally from providers/index.ts so the
  * observability path is available on every install; the endpoint path stays
  * dormant until ANTHROPIC_BASE_URL is configured.
  */
 import { readEnvFile } from '../env.js';
 import { buildLangfuseContainerEnv } from './langfuse-env.js';
+import { buildPosthogContainerEnv } from './posthog-env.js';
 import { registerProviderContainerConfig } from './provider-container-registry.js';
 
 const LANGFUSE_KEYS = [
@@ -37,8 +44,14 @@ const LANGFUSE_KEYS = [
   'LANGFUSE_ENVIRONMENT',
 ];
 
+const POSTHOG_KEYS = [
+  'POSTHOG_API_KEY',
+  'POSTHOG_HOST',
+  'POSTHOG_ENVIRONMENT_LABEL',
+];
+
 registerProviderContainerConfig('claude', (ctx) => {
-  const dotenv = readEnvFile(['ANTHROPIC_BASE_URL', ...LANGFUSE_KEYS]);
+  const dotenv = readEnvFile(['ANTHROPIC_BASE_URL', ...LANGFUSE_KEYS, ...POSTHOG_KEYS]);
   const env: Record<string, string> = {};
 
   if (dotenv.ANTHROPIC_BASE_URL) {
@@ -46,9 +59,10 @@ registerProviderContainerConfig('claude', (ctx) => {
     env.ANTHROPIC_AUTH_TOKEN = 'placeholder';
   }
 
-  // .env is the configured source (host writes LANGFUSE_* there); fall back to
-  // the spawn-time process env so an operator can override ad hoc.
+  // .env is the configured source (host writes LANGFUSE_* / POSTHOG_* there);
+  // fall back to the spawn-time process env so an operator can override ad hoc.
   Object.assign(env, buildLangfuseContainerEnv({ ...ctx.hostEnv, ...dotenv }));
+  Object.assign(env, buildPosthogContainerEnv({ ...ctx.hostEnv, ...dotenv }));
 
   return { env };
 });
