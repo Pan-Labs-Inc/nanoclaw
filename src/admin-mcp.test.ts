@@ -19,6 +19,7 @@ vi.mock('./config.js', async () => {
 import { closeDb, initTestDb, runMigrations } from './db/index.js';
 import { getContainerConfig } from './db/container-configs.js';
 import { getAgentGroupByFolder, createAgentGroup } from './db/agent-groups.js';
+import { getMessagingGroupByPlatform } from './db/messaging-groups.js';
 import { materializeContainerJson } from './container-config.js';
 import { createAdminMcpHandler } from './admin-mcp.js';
 
@@ -356,6 +357,25 @@ describe('Admin MCP endpoint', () => {
       expect(result.requireOptIn).toBe(false);
       expect(typeof result.agentGroupId).toBe('string');
       expect(typeof result.messagingGroupId).toBe('string');
+    });
+
+    it('creates the messaging group with a public unknown-sender policy', async () => {
+      // Born-suppressed 1:1 registrations must NOT be 'strict': activation
+      // rebinds platform_id but never grants membership, so a strict policy
+      // drops the activating user as not_member and the channel goes silent
+      // after the welcome. Pin 'public' so the regression can't return.
+      const handler = createAdminMcpHandler({ token: TOKEN });
+      const res = await callTool(handler, 'dm_register', {
+        channel: 'sms',
+        address: '+15557654321',
+        groupName: 'smspublic',
+        require_opt_in: false,
+      });
+      expect(res.status).toBe(200);
+
+      const mg = getMessagingGroupByPlatform('sms', '+15557654321');
+      expect(mg).toBeDefined();
+      expect(mg?.unknown_sender_policy).toBe('public');
     });
   });
 

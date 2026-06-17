@@ -291,7 +291,13 @@ function dmRegisterTool(args: Record<string, unknown>) {
       platform_id: platformId,
       name: displayName || address,
       is_group: 0,
-      unknown_sender_policy: 'strict',
+      // Born-suppressed DM/start-token registrations are 1:1 channels: the only
+      // possible sender is the user who activates by tapping the deep link (or
+      // texting the keyword). 'strict' would drop that user as not_member after
+      // activation (activation rebinds platform_id but never grants membership),
+      // so the channel goes silent after the welcome. 'public' matches Pan's
+      // own register default and lets the activating user through.
+      unknown_sender_policy: 'public',
       created_at: now,
     });
     messagingGroup = getMessagingGroupByPlatform(channel, platformId);
