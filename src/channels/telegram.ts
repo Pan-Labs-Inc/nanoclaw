@@ -10,6 +10,7 @@ import { log } from '../log.js';
 import { createMessagingGroup, getMessagingGroupByPlatform, updateMessagingGroup } from '../db/messaging-groups.js';
 import { grantRole, hasAnyOwner } from '../modules/permissions/db/user-roles.js';
 import { upsertUser } from '../modules/permissions/db/users.js';
+import { isTelegramGroupPlatformId } from '../platform-id.js';
 import { createChatSdkBridge, type ReplyContext } from './chat-sdk-bridge.js';
 import { sanitizeTelegramLegacyMarkdown } from './telegram-markdown-sanitize.js';
 import { registerChannelAdapter } from './channel-registry.js';
@@ -59,12 +60,6 @@ async function fetchBotUsername(token: string): Promise<string | null> {
     log.warn('Telegram getMe failed', { err });
     return null;
   }
-}
-
-function isGroupPlatformId(platformId: string): boolean {
-  // platformId is "telegram:<chatId>". Negative chat IDs are groups/channels.
-  const id = platformId.split(':').pop() ?? '';
-  return id.startsWith('-');
 }
 
 interface InboundFields {
@@ -204,7 +199,7 @@ function createPairingInterceptor(
         text,
         botUsername,
         platformId,
-        isGroup: isGroupPlatformId(platformId),
+        isGroup: isTelegramGroupPlatformId(platformId),
         adminUserId: authorUserId,
       });
       if (!consumed) {
