@@ -18,7 +18,12 @@ vi.mock('../config.js', async () => {
 });
 
 import { closeDb, initTestDb, runMigrations } from '../db/index.js';
-import { getMessagingGroupByPlatform } from '../db/messaging-groups.js';
+import {
+  getMessagingGroupByPlatform,
+  getMessagingGroup,
+  getMessagingGroupAgents,
+  createMessagingGroup,
+} from '../db/messaging-groups.js';
 import { readDmRegistrations } from '../dm-registrations.js';
 import { sessionsBaseDir } from '../session-manager.js';
 import { createAdminMcpHandler } from '../admin-mcp.js';
@@ -155,9 +160,10 @@ describe('tryActivateStartToken', () => {
     expect(readDmRegistrations()[`telegram:${START_TOKEN}`].activatedAt).toBeUndefined();
   });
 
-  it('refuses activation when the chat already has a messaging group (UNIQUE conflict)', async () => {
+  it('refuses activation when a DM chat already has a messaging group (UNIQUE conflict)', async () => {
     await registerPending();
     // Simulate the chat having messaged the bot before tapping the link.
+    // Positive chat id = a 1:1 DM, where the refusal still holds (#958).
     await callTool('dm_register', {
       channel: 'telegram',
       address: '123456789',
@@ -175,6 +181,72 @@ describe('tryActivateStartToken', () => {
     // Registration stays pending; the placeholder messaging group survives.
     expect(readDmRegistrations()[`telegram:${START_TOKEN}`].activatedAt).toBeUndefined();
     expect(getMessagingGroupByPlatform('telegram', `telegram:${START_TOKEN}`)).toBeTruthy();
+  });
+
+  it('clean group bind flips is_group on the rebound placeholder (#958)', async () => {
+    await registerPending();
+    // Negative chat id = a group; no pre-existing row for it.
+    const result = tryActivateStartToken({
+      text: `/start ${START_TOKEN}`,
+      botUsername: 'pan_bot',
+      platformId: 'telegram:-1009998887',
+    });
+
+    expect(result?.replay).toBe(false);
+    expect(getMessagingGroupByPlatform('telegram', `telegram:${START_TOKEN}`)).toBeFalsy();
+    const bound = getMessagingGroupByPlatform('telegram', 'telegram:-1009998887');
+    expect(bound).toBeTruthy();
+    // Group rebind sets is_group=1 (placeholder is born is_group=0) and the
+    // policy stays public (born so for require_opt_in registrations).
+    expect(bound!.is_group).toBe(1);
+    expect(bound!.unknown_sender_policy).toBe('public');
+  });
+
+  it('takes over an existing group row instead of refusing (#958)', async () => {
+    await registerPending();
+    // The bot was already in the target group, so an (unwired, strict) stub row
+    // exists for it — the `?startgroup=` add-flow won't re-trigger and the
+    // operator redeems by hand with `/start@<bot> <token>`.
+    createMessagingGroup({
+      id: 'mg-squatter-group',
+      channel_type: 'telegram',
+      platform_id: 'telegram:-1009998887',
+      name: 'pre-existing group',
+      is_group: 0,
+      unknown_sender_policy: 'strict',
+      created_at: new Date().toISOString(),
+    });
+    expect(getMessagingGroupAgents('mg-squatter-group')).toHaveLength(0);
+
+    const result = tryActivateStartToken({
+      text: `/start@pan_bot ${START_TOKEN}`,
+      botUsername: 'pan_bot',
+      platformId: 'telegram:-1009998887',
+    });
+
+    expect(result).toMatchObject({
+      groupName: GROUP,
+      boundPlatformId: 'telegram:-1009998887',
+      replay: false,
+    });
+
+    // The stub is evicted; the placeholder (which holds the registration's
+    // wiring + session) takes over the chat id and is promoted to a public
+    // group. Both the token-placeholder id and the squatter id are gone.
+    expect(getMessagingGroupByPlatform('telegram', `telegram:${START_TOKEN}`)).toBeFalsy();
+    expect(getMessagingGroup('mg-squatter-group')).toBeUndefined();
+    const bound = getMessagingGroupByPlatform('telegram', 'telegram:-1009998887');
+    expect(bound).toBeTruthy();
+    expect(bound!.id).not.toBe('mg-squatter-group');
+    expect(bound!.is_group).toBe(1);
+    expect(bound!.unknown_sender_policy).toBe('public');
+    // The registration's agent wiring rode across on the surviving placeholder.
+    expect(getMessagingGroupAgents(bound!.id)).toHaveLength(1);
+
+    // Registration stamped active, and awareness seeded into the rebound agent.
+    expect(readDmRegistrations()[`telegram:${START_TOKEN}`].activatedAt).toBeTruthy();
+    const tasks = readSeededTasks().filter((t) => t.content.includes('channel is now active'));
+    expect(tasks).toHaveLength(1);
   });
 
   it('swallows a same-chat replay but ignores the token from a different chat', async () => {

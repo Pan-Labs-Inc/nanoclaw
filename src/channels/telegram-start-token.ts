@@ -25,9 +25,11 @@ import {
   getMessagingGroupByPlatform,
   getMessagingGroupAgents,
   updateMessagingGroup,
+  deleteMessagingGroup,
 } from '../db/messaging-groups.js';
 import { readDmRegistrations, writeDmRegistrations } from '../dm-registrations.js';
 import { log } from '../log.js';
+import { isTelegramGroupPlatformId } from '../platform-id.js';
 import { resolveSession, writeSessionMessage } from '../session-manager.js';
 
 // Telegram start payloads are [A-Za-z0-9_-]{1,64}; require ≥8 so short words
@@ -95,22 +97,49 @@ export function tryActivateStartToken(input: {
     return null;
   }
 
-  // Rebinding would violate UNIQUE(channel_type, platform_id) if the chat
-  // already has a row (e.g. the user messaged the bot before tapping the
-  // link). Refuse loudly and leave the registration pending — the operator
-  // resolves the conflict; silent merging would mis-wire agents.
+  const isGroup = isTelegramGroupPlatformId(input.platformId);
+  const now = new Date().toISOString();
+
+  // A row already exists for this chat — the chat contacted the bot before the
+  // token was redeemed. The two channel shapes diverge here (#958):
   const existing = getMessagingGroupByPlatform('telegram', input.platformId);
   if (existing) {
-    log.error('Telegram start-token activation refused — chat already has a messaging group', {
-      groupName: reg.groupName,
-      platformId: input.platformId,
-      existingMessagingGroupId: existing.id,
-    });
-    return null;
+    if (!isGroup) {
+      // DM: rebinding the placeholder onto this chat would violate
+      // UNIQUE(channel_type, platform_id). Refuse loudly and leave the
+      // registration pending — the operator resolves the conflict; silent
+      // merging would mis-wire agents on a 1:1 channel.
+      log.error('Telegram start-token activation refused — chat already has a messaging group', {
+        groupName: reg.groupName,
+        platformId: input.platformId,
+        existingMessagingGroupId: existing.id,
+      });
+      return null;
+    }
+
+    // Group: the bot is already a member of the target group (so the
+    // `?startgroup=` add-flow won't re-trigger and an operator redeems the
+    // token by hand with `/start@<bot> <token>`). The existing row is the
+    // unwanted occupant of the real chat id — typically an unwired stub the
+    // channel-registration flow created when the bot was added. Rather than
+    // refusing, evict that stub to free the UNIQUE(channel_type, platform_id)
+    // slot, then take it over with the placeholder, which already carries the
+    // registration's agent wiring + session. The placeholder is the survivor
+    // in every activation path, so the rest of the bind is identical to the
+    // clean case below. Groups are public by nature, so the activating member
+    // is never dropped as not_member.
+    deleteMessagingGroup(existing.id);
   }
 
-  const now = new Date().toISOString();
-  updateMessagingGroup(placeholder.id, { platform_id: input.platformId });
+  // Clean bind (also reached after a group-squatter eviction above): repoint the
+  // placeholder onto the real chat id. For a group also flip is_group (the
+  // placeholder is born is_group=0 for a 1:1); the placeholder's
+  // unknown_sender_policy is already 'public' (born so for every require_opt_in
+  // registration), so it carries through.
+  updateMessagingGroup(placeholder.id, {
+    platform_id: input.platformId,
+    ...(isGroup ? { is_group: 1 } : {}),
+  });
   regs[tokenPlatformId] = { ...reg, activatedAt: now, boundPlatformId: input.platformId };
   writeDmRegistrations(regs);
 
@@ -119,6 +148,7 @@ export function tryActivateStartToken(input: {
   log.info('Telegram start-token activation accepted', {
     groupName: reg.groupName,
     platformId: input.platformId,
+    isGroup,
   });
 
   return { groupName: reg.groupName, tokenPlatformId, boundPlatformId: input.platformId, replay: false };
