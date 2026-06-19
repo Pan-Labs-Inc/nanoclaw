@@ -41,6 +41,7 @@ import { DATA_DIR } from '../config.js';
 import { log } from '../log.js';
 import type { ChannelAdapter, ChannelSetup, DeliveryAddress, InboundEvent, OutboundMessage } from './adapter.js';
 import { registerChannelAdapter } from './channel-registry.js';
+import { tryActivateStartToken } from './start-token.js';
 
 const PLATFORM_ID = 'local';
 
@@ -228,6 +229,21 @@ function createAdapter(): ChannelAdapter {
     // Plain chat — claim the slot (evicting any prior client) and route via
     // the standard onInbound path (adapter injects its own channelType).
     claimChatSlot();
+
+    // Channel-agnostic start-token activation (#1018): a `start <token>` (or a
+    // bare token) binds this cli slot to a born-suppressed `cli:<token>`
+    // registration — rebinding its placeholder onto PLATFORM_ID ('local', the id
+    // plain chat routes to) and seeding the activation-awareness task that drives
+    // the greeting. The token message is consumed; it never reaches an agent.
+    const activation = tryActivateStartToken({ channel: 'cli', text: payload.text, platformId: PLATFORM_ID });
+    if (activation) {
+      log.info('CLI start-token activation', {
+        boundPlatformId: activation.boundPlatformId,
+        replay: activation.replay,
+      });
+      return;
+    }
+
     try {
       await config.onInbound(PLATFORM_ID, null, {
         id: `cli-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
