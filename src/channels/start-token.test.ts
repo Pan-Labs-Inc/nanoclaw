@@ -5,7 +5,7 @@ import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { TEST_DIR } = vi.hoisted(() => ({
-  TEST_DIR: '/tmp/nanoclaw-telegram-start-token-test',
+  TEST_DIR: '/tmp/nanoclaw-start-token-test',
 }));
 
 vi.mock('../config.js', async () => {
@@ -24,14 +24,16 @@ import {
   getMessagingGroupAgents,
   createMessagingGroup,
 } from '../db/messaging-groups.js';
-import { readDmRegistrations } from '../dm-registrations.js';
+import { readDmRegistrations, writeDmRegistrations } from '../dm-registrations.js';
 import { sessionsBaseDir } from '../session-manager.js';
 import { createAdminMcpHandler } from '../admin-mcp.js';
-import { extractStartToken, tryActivateStartToken } from './telegram-start-token.js';
+import { extractStartToken, tryActivateStartToken } from './start-token.js';
 
 const TOKEN = 'admin-mcp-token-1234567890abcdef1234';
 const START_TOKEN = 'tok_a1b2c3d4e5f6';
 const GROUP = 'pan-teen-test-fid-aa11bb';
+
+const tg = { channel: 'telegram', botUsername: 'pan_bot' };
 
 async function callTool(name: string, args: Record<string, unknown>): Promise<Record<string, unknown>> {
   const handler = createAdminMcpHandler({ token: TOKEN });
@@ -92,35 +94,59 @@ afterEach(() => {
   if (fs.existsSync(TEST_DIR)) fs.rmSync(TEST_DIR, { recursive: true, force: true });
 });
 
-describe('extractStartToken', () => {
+describe('extractStartToken — Telegram (/start command form)', () => {
   it('extracts the payload from /start <token>', () => {
-    expect(extractStartToken(`/start ${START_TOKEN}`, 'pan_bot')).toBe(START_TOKEN);
+    expect(extractStartToken(`/start ${START_TOKEN}`, tg)).toBe(START_TOKEN);
   });
 
   it('extracts from the privacy-ON group form /start@bot <token>', () => {
-    expect(extractStartToken(`/start@pan_bot ${START_TOKEN}`, 'pan_bot')).toBe(START_TOKEN);
-    expect(extractStartToken(`/START@PAN_BOT ${START_TOKEN}`, 'pan_bot')).toBe(START_TOKEN);
+    expect(extractStartToken(`/start@pan_bot ${START_TOKEN}`, tg)).toBe(START_TOKEN);
+    expect(extractStartToken(`/START@PAN_BOT ${START_TOKEN}`, tg)).toBe(START_TOKEN);
   });
 
   it('rejects a mismatched bot username', () => {
-    expect(extractStartToken(`/start@other_bot ${START_TOKEN}`, 'pan_bot')).toBeNull();
+    expect(extractStartToken(`/start@other_bot ${START_TOKEN}`, tg)).toBeNull();
   });
 
   it('rejects bare /start, short payloads, and non-token text', () => {
-    expect(extractStartToken('/start', 'pan_bot')).toBeNull();
-    expect(extractStartToken('/start hi', 'pan_bot')).toBeNull(); // < 8 chars
-    expect(extractStartToken('/start has spaces in it', 'pan_bot')).toBeNull();
-    expect(extractStartToken('hello /start tok_a1b2c3d4', 'pan_bot')).toBeNull();
-    expect(extractStartToken('/start tok!llegal$chars', 'pan_bot')).toBeNull();
+    expect(extractStartToken('/start', tg)).toBeNull();
+    expect(extractStartToken('/start hi', tg)).toBeNull(); // < 8 chars
+    expect(extractStartToken('/start has spaces in it', tg)).toBeNull();
+    expect(extractStartToken('hello /start tok_a1b2c3d4', tg)).toBeNull();
+    expect(extractStartToken('/start tok!llegal$chars', tg)).toBeNull();
+  });
+
+  it('does NOT accept a bare token on Telegram (command form required)', () => {
+    expect(extractStartToken(START_TOKEN, tg)).toBeNull();
   });
 });
 
-describe('tryActivateStartToken', () => {
+describe('extractStartToken — generic channels (SMS, cli)', () => {
+  for (const channel of ['sms', 'cli']) {
+    it(`[${channel}] accepts "start <token>", "/start <token>", and a bare token`, () => {
+      expect(extractStartToken(`start ${START_TOKEN}`, { channel })).toBe(START_TOKEN);
+      expect(extractStartToken(`START ${START_TOKEN}`, { channel })).toBe(START_TOKEN);
+      expect(extractStartToken(`/start ${START_TOKEN}`, { channel })).toBe(START_TOKEN);
+      expect(extractStartToken(START_TOKEN, { channel })).toBe(START_TOKEN);
+      expect(extractStartToken(`  ${START_TOKEN}  `, { channel })).toBe(START_TOKEN);
+    });
+
+    it(`[${channel}] rejects short payloads, illegal chars, and prose`, () => {
+      expect(extractStartToken('start hi', { channel })).toBeNull(); // < 8 chars
+      expect(extractStartToken('start has spaces in it', { channel })).toBeNull();
+      expect(extractStartToken('hey what is this', { channel })).toBeNull();
+      expect(extractStartToken(`start ${START_TOKEN}!extra`, { channel })).toBeNull();
+    });
+  }
+});
+
+describe('tryActivateStartToken — Telegram', () => {
   it('activates a pending registration: rebinds the messaging group, stamps the store, seeds awareness', async () => {
     await registerPending();
 
     const result = tryActivateStartToken({
       text: `/start ${START_TOKEN}`,
+      channel: 'telegram',
       botUsername: 'pan_bot',
       platformId: 'telegram:123456789',
     });
@@ -151,10 +177,10 @@ describe('tryActivateStartToken', () => {
   it('does not consume non-matching messages or unknown tokens', async () => {
     await registerPending();
     expect(
-      tryActivateStartToken({ text: 'hey there', botUsername: 'pan_bot', platformId: 'telegram:1' }),
+      tryActivateStartToken({ text: 'hey there', channel: 'telegram', botUsername: 'pan_bot', platformId: 'telegram:1' }),
     ).toBeNull();
     expect(
-      tryActivateStartToken({ text: '/start tok_unknown99', botUsername: 'pan_bot', platformId: 'telegram:1' }),
+      tryActivateStartToken({ text: '/start tok_unknown99', channel: 'telegram', botUsername: 'pan_bot', platformId: 'telegram:1' }),
     ).toBeNull();
     // Registration untouched.
     expect(readDmRegistrations()[`telegram:${START_TOKEN}`].activatedAt).toBeUndefined();
@@ -173,6 +199,7 @@ describe('tryActivateStartToken', () => {
 
     const result = tryActivateStartToken({
       text: `/start ${START_TOKEN}`,
+      channel: 'telegram',
       botUsername: 'pan_bot',
       platformId: 'telegram:123456789',
     });
@@ -188,6 +215,7 @@ describe('tryActivateStartToken', () => {
     // Negative chat id = a group; no pre-existing row for it.
     const result = tryActivateStartToken({
       text: `/start ${START_TOKEN}`,
+      channel: 'telegram',
       botUsername: 'pan_bot',
       platformId: 'telegram:-1009998887',
     });
@@ -220,6 +248,7 @@ describe('tryActivateStartToken', () => {
 
     const result = tryActivateStartToken({
       text: `/start@pan_bot ${START_TOKEN}`,
+      channel: 'telegram',
       botUsername: 'pan_bot',
       platformId: 'telegram:-1009998887',
     });
@@ -253,6 +282,7 @@ describe('tryActivateStartToken', () => {
     await registerPending();
     const first = tryActivateStartToken({
       text: `/start ${START_TOKEN}`,
+      channel: 'telegram',
       botUsername: 'pan_bot',
       platformId: 'telegram:123456789',
     });
@@ -260,6 +290,7 @@ describe('tryActivateStartToken', () => {
 
     const replay = tryActivateStartToken({
       text: `/start ${START_TOKEN}`,
+      channel: 'telegram',
       botUsername: 'pan_bot',
       platformId: 'telegram:123456789',
     });
@@ -267,10 +298,77 @@ describe('tryActivateStartToken', () => {
 
     const foreign = tryActivateStartToken({
       text: `/start ${START_TOKEN}`,
+      channel: 'telegram',
       botUsername: 'pan_bot',
       platformId: 'telegram:999999999',
     });
     expect(foreign).toBeNull();
+  });
+});
+
+describe('tryActivateStartToken — generic channel (cli)', () => {
+  // Seed a pending cli registration + placeholder messaging group directly. The
+  // admin-mcp dm_register token-mode for non-telegram channels lands in a later
+  // slice; this proves the channel-agnostic activation core in isolation.
+  function seedPendingCli(): void {
+    const now = new Date().toISOString();
+    const regs = readDmRegistrations();
+    regs[`cli:${START_TOKEN}`] = {
+      groupName: GROUP,
+      channel: 'cli',
+      address: START_TOKEN,
+      registeredAt: now,
+      requireOptIn: true,
+    };
+    writeDmRegistrations(regs);
+    createMessagingGroup({
+      id: 'mg-cli-placeholder',
+      channel_type: 'cli',
+      platform_id: `cli:${START_TOKEN}`,
+      name: GROUP,
+      is_group: 0,
+      unknown_sender_policy: 'public',
+      created_at: now,
+    });
+  }
+
+  it('binds a cli "start <token>" onto the real platform id and stamps the store', () => {
+    seedPendingCli();
+
+    const result = tryActivateStartToken({
+      text: `start ${START_TOKEN}`,
+      channel: 'cli',
+      platformId: 'local',
+    });
+
+    expect(result).toMatchObject({
+      groupName: GROUP,
+      tokenPlatformId: `cli:${START_TOKEN}`,
+      boundPlatformId: 'local',
+      replay: false,
+    });
+    // Rebound placeholder → real cli platform id.
+    expect(getMessagingGroupByPlatform('cli', `cli:${START_TOKEN}`)).toBeFalsy();
+    expect(getMessagingGroupByPlatform('cli', 'local')).toBeTruthy();
+    // Registration stamped active.
+    const reg = readDmRegistrations()[`cli:${START_TOKEN}`];
+    expect(reg.activatedAt).toBeTruthy();
+    expect(reg.boundPlatformId).toBe('local');
+  });
+
+  it('a bare token (no "start" keyword) also activates on cli', () => {
+    seedPendingCli();
+    const result = tryActivateStartToken({ text: START_TOKEN, channel: 'cli', platformId: 'local' });
+    expect(result?.boundPlatformId).toBe('local');
+  });
+
+  it('does not cross channels — a telegram token does not match a cli registration', () => {
+    seedPendingCli();
+    // Same token, wrong channel namespace → no telegram registration exists.
+    expect(
+      tryActivateStartToken({ text: `/start ${START_TOKEN}`, channel: 'telegram', botUsername: 'pan_bot', platformId: 'telegram:1' }),
+    ).toBeNull();
+    expect(readDmRegistrations()[`cli:${START_TOKEN}`].activatedAt).toBeUndefined();
   });
 });
 
@@ -283,6 +381,7 @@ describe('dm_status telegram activation states', () => {
 
     tryActivateStartToken({
       text: `/start ${START_TOKEN}`,
+      channel: 'telegram',
       botUsername: 'pan_bot',
       platformId: 'telegram:123456789',
     });

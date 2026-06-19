@@ -29,7 +29,7 @@ export function namespacedPlatformId(channel: string, raw: string): string {
  * (as opposed to a 1:1 DM)? Telegram chat IDs are negative for groups and
  * positive for direct messages. `platformId` is the namespaced
  * "telegram:<chatId>" form. Single source of truth shared by the inbound
- * interceptor (telegram.ts) and start-token activation (telegram-start-token.ts).
+ * interceptor (telegram.ts) and start-token activation (start-token.ts).
  */
 export function isTelegramGroupPlatformId(platformId: string): boolean {
   const id = platformId.split(':').pop() ?? '';
