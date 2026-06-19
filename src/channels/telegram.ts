@@ -16,7 +16,7 @@ import { sanitizeTelegramLegacyMarkdown } from './telegram-markdown-sanitize.js'
 import { registerChannelAdapter } from './channel-registry.js';
 import type { ChannelAdapter, ChannelSetup, InboundMessage } from './adapter.js';
 import { tryConsume } from './telegram-pairing.js';
-import { tryActivateStartToken } from './telegram-start-token.js';
+import { tryActivateStartToken } from './start-token.js';
 
 /**
  * Retry a one-shot operation that can fail on transient network errors at
@@ -188,7 +188,7 @@ function createPairingInterceptor(
       // Checked before pairing: tokens are ≥8 chars so they can never collide
       // with a 4-digit pairing code. On match the token message is consumed —
       // it never reaches an agent; the seeded awareness task drives the greeting.
-      const activation = tryActivateStartToken({ text, botUsername, platformId });
+      const activation = tryActivateStartToken({ text, channel: 'telegram', botUsername, platformId });
       if (activation) {
         if (!activation.replay) {
           await sendStartTokenConfirmation(token, platformId);
