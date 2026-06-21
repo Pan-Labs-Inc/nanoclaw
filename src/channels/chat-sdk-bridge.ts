@@ -184,7 +184,7 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
 
     return {
       id: message.id,
-      kind: 'chat-sdk',
+      kind: 'chat',
       content: serialized,
       timestamp: message.metadata.dateSent.toISOString(),
       isMention,

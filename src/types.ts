@@ -134,7 +134,11 @@ export interface Session {
 
 // ── Session DB entities ──
 
-export type MessageInKind = 'chat' | 'chat-sdk' | 'task' | 'webhook' | 'system';
+// 'chat' is the single conversational inbound kind across every channel — the
+// chat-sdk bridge (Telegram/WhatsApp) and the cli/sms adapters all stamp it.
+// (The former 'chat-sdk' fork carried no behavioral value: routing, formatting,
+// and author extraction never branched on it; rendering keys on content.type.)
+export type MessageInKind = 'chat' | 'task' | 'webhook' | 'system';
 export type MessageInStatus = 'pending' | 'processing' | 'completed' | 'failed';
 
 export interface MessageIn {

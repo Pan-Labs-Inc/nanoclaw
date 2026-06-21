@@ -156,7 +156,7 @@ async function handleRequest(request: ApprovalRequest): Promise<Decision> {
       target.messagingGroup.channel_type,
       target.messagingGroup.platform_id,
       null,
-      'chat-sdk',
+      'chat',
       JSON.stringify({
         type: 'ask_question',
         questionId: approvalId,
@@ -232,7 +232,7 @@ async function editCardExpired(row: PendingApproval, reason: string): Promise<vo
       row.channel_type,
       row.platform_id,
       null,
-      'chat-sdk',
+      'chat',
       JSON.stringify({
         operation: 'edit',
         messageId: row.platform_message_id,

@@ -92,7 +92,7 @@ export const askUserQuestion: McpToolDefinition = {
     // Write question card to outbound.db
     writeMessageOut({
       id: questionId,
-      kind: 'chat-sdk',
+      kind: 'chat',
       platform_id: r.platform_id,
       channel_type: r.channel_type,
       thread_id: r.thread_id,
@@ -154,7 +154,7 @@ export const sendCard: McpToolDefinition = {
 
     writeMessageOut({
       id,
-      kind: 'chat-sdk',
+      kind: 'chat',
       platform_id: r.platform_id,
       channel_type: r.channel_type,
       thread_id: r.thread_id,

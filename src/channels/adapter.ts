@@ -48,7 +48,7 @@ export interface InboundEvent {
   threadId: string | null;
   message: {
     id: string;
-    kind: 'chat' | 'chat-sdk';
+    kind: 'chat';
     content: string; // JSON blob
     timestamp: string;
     /**
@@ -65,7 +65,7 @@ export interface InboundEvent {
 /** Inbound message from adapter to host. */
 export interface InboundMessage {
   id: string;
-  kind: 'chat' | 'chat-sdk';
+  kind: 'chat';
   content: unknown; // JS object — host will JSON.stringify before writing to session DB
   timestamp: string;
   /**
