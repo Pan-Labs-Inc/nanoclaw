@@ -68,7 +68,7 @@ interface InboundFields {
 }
 
 function readInboundFields(message: InboundMessage): InboundFields {
-  if (message.kind !== 'chat-sdk' || !message.content || typeof message.content !== 'object') {
+  if (message.kind !== 'chat' || !message.content || typeof message.content !== 'object') {
     return { text: '', authorUserId: null };
   }
   const c = message.content as { text?: string; author?: { userId?: string } };

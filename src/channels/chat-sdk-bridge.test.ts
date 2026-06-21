@@ -107,7 +107,7 @@ describe('createChatSdkBridge.deliver — display cards (send_card)', () => {
       supportsThreads: false,
     });
     const id = await bridge.deliver('telegram:42', null, {
-      kind: 'chat-sdk',
+      kind: 'chat',
       content: {
         type: 'card',
         card: {
@@ -132,7 +132,7 @@ describe('createChatSdkBridge.deliver — display cards (send_card)', () => {
       supportsThreads: false,
     });
     await bridge.deliver('discord:guild:chan', null, {
-      kind: 'chat-sdk',
+      kind: 'chat',
       content: {
         type: 'card',
         card: {
@@ -156,7 +156,7 @@ describe('createChatSdkBridge.deliver — display cards (send_card)', () => {
       supportsThreads: false,
     });
     await bridge.deliver('discord:guild:chan', null, {
-      kind: 'chat-sdk',
+      kind: 'chat',
       content: {
         type: 'card',
         card: {
@@ -183,7 +183,7 @@ describe('createChatSdkBridge.deliver — display cards (send_card)', () => {
       supportsThreads: false,
     });
     const id = await bridge.deliver('telegram:42', null, {
-      kind: 'chat-sdk',
+      kind: 'chat',
       content: { type: 'card', card: {} },
     });
     expect(id).toBeUndefined();
@@ -197,7 +197,7 @@ describe('createChatSdkBridge.deliver — display cards (send_card)', () => {
       supportsThreads: false,
     });
     await bridge.deliver('telegram:42', null, {
-      kind: 'chat-sdk',
+      kind: 'chat',
       content: { text: 'plain hello' },
     });
     expect(calls).toHaveLength(1);

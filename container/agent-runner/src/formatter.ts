@@ -23,7 +23,7 @@ export interface CommandInfo {
 
 /**
  * Categorize a message as a command or not.
- * Only applies to chat/chat-sdk messages.
+ * Only applies to chat messages.
  *
  * The extracted `senderId` is compared against `NANOCLAW_ADMIN_USER_IDS`
  * which stores ids in the namespaced form `<channel_type>:<raw>` (see
@@ -73,7 +73,7 @@ export function isClearCommand(msg: MessageInRow): boolean {
  * the outer loop reopen the query.
  */
 export function isRunnerCommand(msg: MessageInRow): boolean {
-  if (msg.kind !== 'chat' && msg.kind !== 'chat-sdk') return false;
+  if (msg.kind !== 'chat') return false;
   const cat = categorizeMessage(msg).category;
   return cat === 'admin' || cat === 'passthrough';
 }
@@ -131,7 +131,7 @@ export function formatMessages(messages: MessageInRow[]): string {
   if (messages.length === 0) return header;
 
   // Group by kind
-  const chatMessages = messages.filter((m) => m.kind === 'chat' || m.kind === 'chat-sdk');
+  const chatMessages = messages.filter((m) => m.kind === 'chat');
   const taskMessages = messages.filter((m) => m.kind === 'task');
   const webhookMessages = messages.filter((m) => m.kind === 'webhook');
   const systemMessages = messages.filter((m) => m.kind === 'system');

@@ -124,7 +124,7 @@ export async function requestSenderApproval(input: RequestSenderApprovalInput): 
       target.messagingGroup.channel_type,
       target.messagingGroup.platform_id,
       null,
-      'chat-sdk',
+      'chat',
       JSON.stringify({
         type: 'ask_question',
         questionId: approvalId,

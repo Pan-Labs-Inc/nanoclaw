@@ -195,7 +195,7 @@ describe('unknown-sender request_approval flow', () => {
     expect(channel).toBe('telegram');
     expect(platformId).toBe('dm-owner'); // delivered to owner's DM
     expect(thread).toBeNull();
-    expect(kind).toBe('chat-sdk');
+    expect(kind).toBe('chat');
     const payload = JSON.parse(content as string);
     expect(payload.type).toBe('ask_question');
     expect(payload.questionId).toMatch(/^nsa-/);

@@ -201,7 +201,7 @@ export async function requestApproval(opts: RequestApprovalOptions): Promise<voi
         target.messagingGroup.channel_type,
         target.messagingGroup.platform_id,
         null,
-        'chat-sdk',
+        'chat',
         JSON.stringify({
           type: 'ask_question',
           questionId: approvalId,

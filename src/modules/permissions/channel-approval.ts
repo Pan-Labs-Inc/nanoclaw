@@ -228,7 +228,7 @@ export async function requestChannelApproval(input: RequestChannelApprovalInput)
       delivery.messagingGroup.channel_type,
       delivery.messagingGroup.platform_id,
       null,
-      'chat-sdk',
+      'chat',
       JSON.stringify({
         type: 'ask_question',
         questionId: messagingGroupId,
