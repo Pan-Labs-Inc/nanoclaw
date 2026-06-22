@@ -279,6 +279,85 @@ describe('deliverSessionMessages — retry and permanent failure', () => {
   });
 });
 
+describe('deliverSessionMessages — start-token rebind re-address (#1068)', () => {
+  it('re-addresses a stale placeholder platform_id to the session origin chat after rebind', async () => {
+    // An in-flight container spawned while the messaging group was still the
+    // start-token placeholder, so it stamped this outbound with the placeholder
+    // id `telegram:<token>`. The user then tapped /start: the messaging group
+    // rebound IN PLACE to the real chat (telegram:123) — same row id, new
+    // platform_id. The captured token no longer resolves; delivery must fall
+    // back to the session's current origin chat instead of failing permanently.
+    seedAgentAndChannel(); // mg-1 → telegram:123 (the bound chat)
+    const { session } = resolveSession('ag-1', 'mg-1', null, 'shared');
+
+    const TOKEN_PID = 'telegram:tok_a1b2c3d4e5f6';
+    const outDb = new Database(outboundDbPath('ag-1', session.id));
+    outDb
+      .prepare(
+        `INSERT INTO messages_out (id, timestamp, kind, platform_id, channel_type, content)
+       VALUES (?, datetime('now'), 'chat', ?, 'telegram', ?)`,
+      )
+      .run('out-rebind', TOKEN_PID, JSON.stringify({ text: 'day-1 opener' }));
+    outDb.close();
+
+    const calls: Array<{ platformId: string }> = [];
+    setDeliveryAdapter({
+      async deliver(_ct, platformId) {
+        calls.push({ platformId });
+        return 'plat-rebound';
+      },
+    });
+
+    await deliverSessionMessages(session);
+
+    // Delivered exactly once, to the BOUND chat — not the consumed token.
+    expect(calls).toEqual([{ platformId: 'telegram:123' }]);
+
+    const inDb = openInboundDb('ag-1', session.id);
+    const delivered = getDeliveredIds(inDb);
+    inDb.close();
+    expect(delivered.has('out-rebind')).toBe(true);
+
+    expect(logMock.warn).toHaveBeenCalledWith(
+      'Outbound platform_id no longer resolves — re-addressing to the session origin chat',
+      expect.objectContaining({ messageId: 'out-rebind' }),
+    );
+  });
+
+  it('still fails permanently when the stale platform_id is on a different channel than the origin', async () => {
+    // Defensive: the re-address only fires on a same-channel match, so a truly
+    // mis-addressed message is not silently redirected to the origin chat.
+    seedAgentAndChannel(); // mg-1 → telegram:123
+    const { session } = resolveSession('ag-1', 'mg-1', null, 'shared');
+
+    const outDb = new Database(outboundDbPath('ag-1', session.id));
+    outDb
+      .prepare(
+        `INSERT INTO messages_out (id, timestamp, kind, platform_id, channel_type, content)
+       VALUES (?, datetime('now'), 'chat', 'discord:gone', 'discord', ?)`,
+      )
+      .run('out-wrong-channel', JSON.stringify({ text: 'orphan' }));
+    outDb.close();
+
+    const calls: string[] = [];
+    setDeliveryAdapter({
+      async deliver(_ct, platformId) {
+        calls.push(platformId);
+        return 'x';
+      },
+    });
+
+    await deliverSessionMessages(session);
+    await deliverSessionMessages(session);
+    await deliverSessionMessages(session);
+
+    expect(calls).toHaveLength(0);
+    const inDb = openInboundDb('ag-1', session.id);
+    expect(getDeliveredIds(inDb).has('out-wrong-channel')).toBe(true);
+    inDb.close();
+  });
+});
+
 describe('deliverSessionMessages — permission check', () => {
   it('rejects delivery to an unauthorized channel destination', async () => {
     seedAgentAndChannel();

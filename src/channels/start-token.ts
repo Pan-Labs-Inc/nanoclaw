@@ -28,7 +28,7 @@ import {
   updateMessagingGroup,
   deleteMessagingGroup,
 } from '../db/messaging-groups.js';
-import { readDmRegistrations, writeDmRegistrations } from '../dm-registrations.js';
+import { readDmRegistrations, writeDmRegistrations, type DmRegistration } from '../dm-registrations.js';
 import { log } from '../log.js';
 import { isTelegramGroupPlatformId } from '../platform-id.js';
 import { resolveSession, writeSessionMessage } from '../session-manager.js';
@@ -51,10 +51,7 @@ const GENERIC_RE = new RegExp(`^(?:/?start\\s+)?${TOKEN}$`, 'i');
  * username); other channels accept `start <token>` or a bare token. Returns
  * null for any non-match.
  */
-export function extractStartToken(
-  text: string,
-  opts: { channel: string; botUsername?: string | null },
-): string | null {
+export function extractStartToken(text: string, opts: { channel: string; botUsername?: string | null }): string | null {
   const trimmed = text.trim();
   if (opts.channel === 'telegram') {
     const m = trimmed.match(TELEGRAM_RE);
@@ -65,6 +62,29 @@ export function extractStartToken(
   }
   const m = trimmed.match(GENERIC_RE);
   return m ? m[1] : null;
+}
+
+/**
+ * Whether a messaging group's platform id is still an UNREDEEMED start-token
+ * placeholder — a born-suppressed `require_opt_in` registration whose token has
+ * not yet been tapped (no `activatedAt`). The placeholder's platform id is the
+ * `<channel>:<token>` the registration is keyed by, which resolves to no real
+ * chat. A delivering container must NOT spawn for such a group: its outbound
+ * would be addressed to the unbound token and fail permanently, and Day-1 must
+ * not fire for a pending persona (#1068 / #728).
+ *
+ * After the `/start` rebind the registration KEY stays the token but the group's
+ * platform id becomes the real chat id (`tryActivateStartToken` flips it in
+ * place), so a lookup keyed by the now-bound platform id no longer matches and
+ * this returns false — the group is live.
+ */
+export function isUnredeemedStartTokenPlaceholder(
+  platformId: string | null | undefined,
+  regs: Record<string, DmRegistration> = readDmRegistrations(),
+): boolean {
+  if (!platformId) return false;
+  const reg = regs[platformId];
+  return Boolean(reg && reg.requireOptIn && !reg.activatedAt);
 }
 
 /** Whether a bound platform id is a multi-party group for the channel. */
