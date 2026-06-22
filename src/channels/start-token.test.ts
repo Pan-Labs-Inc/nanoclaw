@@ -27,7 +27,8 @@ import {
 import { readDmRegistrations, writeDmRegistrations } from '../dm-registrations.js';
 import { sessionsBaseDir } from '../session-manager.js';
 import { createAdminMcpHandler } from '../admin-mcp.js';
-import { extractStartToken, tryActivateStartToken } from './start-token.js';
+import { extractStartToken, tryActivateStartToken, isUnredeemedStartTokenPlaceholder } from './start-token.js';
+import type { DmRegistration } from '../dm-registrations.js';
 
 const TOKEN = 'admin-mcp-token-1234567890abcdef1234';
 const START_TOKEN = 'tok_a1b2c3d4e5f6';
@@ -71,9 +72,10 @@ function readSeededTasks(): Array<{ content: string; trigger: number }> {
       const db = new Database(dbPath, { readonly: true });
       try {
         rows.push(
-          ...(db
-            .prepare("SELECT content, trigger FROM messages_in WHERE kind = 'task'")
-            .all() as Array<{ content: string; trigger: number }>),
+          ...(db.prepare("SELECT content, trigger FROM messages_in WHERE kind = 'task'").all() as Array<{
+            content: string;
+            trigger: number;
+          }>),
         );
       } finally {
         db.close();
@@ -177,10 +179,20 @@ describe('tryActivateStartToken — Telegram', () => {
   it('does not consume non-matching messages or unknown tokens', async () => {
     await registerPending();
     expect(
-      tryActivateStartToken({ text: 'hey there', channel: 'telegram', botUsername: 'pan_bot', platformId: 'telegram:1' }),
+      tryActivateStartToken({
+        text: 'hey there',
+        channel: 'telegram',
+        botUsername: 'pan_bot',
+        platformId: 'telegram:1',
+      }),
     ).toBeNull();
     expect(
-      tryActivateStartToken({ text: '/start tok_unknown99', channel: 'telegram', botUsername: 'pan_bot', platformId: 'telegram:1' }),
+      tryActivateStartToken({
+        text: '/start tok_unknown99',
+        channel: 'telegram',
+        botUsername: 'pan_bot',
+        platformId: 'telegram:1',
+      }),
     ).toBeNull();
     // Registration untouched.
     expect(readDmRegistrations()[`telegram:${START_TOKEN}`].activatedAt).toBeUndefined();
@@ -366,7 +378,12 @@ describe('tryActivateStartToken — generic channel (cli)', () => {
     seedPendingCli();
     // Same token, wrong channel namespace → no telegram registration exists.
     expect(
-      tryActivateStartToken({ text: `/start ${START_TOKEN}`, channel: 'telegram', botUsername: 'pan_bot', platformId: 'telegram:1' }),
+      tryActivateStartToken({
+        text: `/start ${START_TOKEN}`,
+        channel: 'telegram',
+        botUsername: 'pan_bot',
+        platformId: 'telegram:1',
+      }),
     ).toBeNull();
     expect(readDmRegistrations()[`cli:${START_TOKEN}`].activatedAt).toBeUndefined();
   });
@@ -402,5 +419,44 @@ describe('dm_status telegram activation states', () => {
     });
     const status = await callTool('dm_status', { channel: 'telegram', address: '555000111' });
     expect(status.activationState).toBe('active');
+  });
+});
+
+describe('isUnredeemedStartTokenPlaceholder (#1068)', () => {
+  const reg = (over: Partial<DmRegistration>): DmRegistration => ({
+    groupName: GROUP,
+    channel: 'telegram',
+    address: START_TOKEN,
+    registeredAt: '2026-06-22T00:00:00.000Z',
+    requireOptIn: true,
+    ...over,
+  });
+
+  const placeholderPid = `telegram:${START_TOKEN}`;
+  const boundPid = 'telegram:-5467520989';
+
+  it('is true while a require_opt_in registration is still pending (no activatedAt)', () => {
+    const regs = { [placeholderPid]: reg({}) };
+    expect(isUnredeemedStartTokenPlaceholder(placeholderPid, regs)).toBe(true);
+  });
+
+  it('is false once the token is redeemed — the bound chat id is not a registration key', () => {
+    // After rebind the registration KEY stays the token placeholder but the
+    // messaging group now carries the real chat id; a lookup by that id misses.
+    const regs = { [placeholderPid]: reg({ activatedAt: '2026-06-22T15:40:49.000Z', boundPlatformId: boundPid }) };
+    expect(isUnredeemedStartTokenPlaceholder(boundPid, regs)).toBe(false);
+    // And the consumed placeholder id itself is no longer "unredeemed" either.
+    expect(isUnredeemedStartTokenPlaceholder(placeholderPid, regs)).toBe(false);
+  });
+
+  it('is false for a non-opt-in registration (active immediately, never a placeholder)', () => {
+    const regs = { 'telegram:555000111': reg({ address: '555000111', requireOptIn: false }) };
+    expect(isUnredeemedStartTokenPlaceholder('telegram:555000111', regs)).toBe(false);
+  });
+
+  it('is false for an ordinary chat with no registration, and for null/empty ids', () => {
+    expect(isUnredeemedStartTokenPlaceholder('telegram:123', {})).toBe(false);
+    expect(isUnredeemedStartTokenPlaceholder(null, {})).toBe(false);
+    expect(isUnredeemedStartTokenPlaceholder(undefined, {})).toBe(false);
   });
 });

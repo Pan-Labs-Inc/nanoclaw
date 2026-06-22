@@ -32,6 +32,8 @@ import fs from 'fs';
 import { ensureEgressNetwork } from './egress-lockdown.js';
 import { getActiveSessions } from './db/sessions.js';
 import { getAgentGroup } from './db/agent-groups.js';
+import { getMessagingGroup } from './db/messaging-groups.js';
+import { isUnredeemedStartTokenPlaceholder } from './channels/start-token.js';
 import {
   countDueMessages,
   deleteOrphanProcessingClaims,
@@ -155,6 +157,20 @@ async function sweep(): Promise<void> {
   setTimeout(sweep, SWEEP_INTERVAL_MS);
 }
 
+/**
+ * Whether a session's origin messaging group is still an unredeemed start-token
+ * placeholder (born-suppressed, deep link not yet tapped). Resolves the group
+ * live so a rebind that flipped the placeholder onto a real chat is reflected
+ * immediately. Sessions with no messaging group (or a since-deleted one) are
+ * never placeholders.
+ */
+export function isPendingPlaceholderSession(session: Session): boolean {
+  if (!session.messaging_group_id) return false;
+  const mg = getMessagingGroup(session.messaging_group_id);
+  if (!mg) return false;
+  return isUnredeemedStartTokenPlaceholder(mg.platform_id);
+}
+
 async function sweepSession(session: Session): Promise<void> {
   const agentGroup = getAgentGroup(session.agent_group_id);
   if (!agentGroup) return;
@@ -190,10 +206,23 @@ async function sweepSession(session: Session): Promise<void> {
     // and the wake would never fire.
     const dueCount = countDueMessages(inDb);
     if (dueCount > 0 && !isContainerRunning(session.id)) {
-      log.info('Waking container for due messages', { sessionId: session.id, count: dueCount });
-      // wakeContainer never throws — transient spawn failures (OneCLI down,
-      // etc.) return false and leave messages pending for the next tick.
-      await wakeContainer(session);
+      if (isPendingPlaceholderSession(session)) {
+        // The session is bound to an unredeemed start-token placeholder — the
+        // user has not tapped the deep link yet, so there is no real chat. A
+        // container spawned now would freeze the `<channel>:<token>` placeholder
+        // as its outbound destination (writeSessionRouting) and every reply
+        // would fail to deliver once the token is consumed at rebind (#1068).
+        // Leave the work pending; the rebind seeds a fresh awareness task that
+        // wakes a correctly-routed container.
+        log.info('Skipping wake — messaging group is an unredeemed start-token placeholder', {
+          sessionId: session.id,
+        });
+      } else {
+        log.info('Waking container for due messages', { sessionId: session.id, count: dueCount });
+        // wakeContainer never throws — transient spawn failures (OneCLI down,
+        // etc.) return false and leave messages pending for the next tick.
+        await wakeContainer(session);
+      }
     }
 
     const alive = isContainerRunning(session.id);

@@ -12,7 +12,7 @@ import type Database from 'better-sqlite3';
 import { getRunningSessions, getActiveSessions, createPendingQuestion } from './db/sessions.js';
 import { getAgentGroup } from './db/agent-groups.js';
 import { getDb, hasTable } from './db/connection.js';
-import { getMessagingGroupByPlatform } from './db/messaging-groups.js';
+import { getMessagingGroupByPlatform, getMessagingGroup } from './db/messaging-groups.js';
 import {
   getDueOutboundMessages,
   getDeliveredIds,
@@ -288,7 +288,27 @@ async function deliverMessage(
   // (instead of marking it delivered when nothing was actually delivered,
   // which was the pre-refactor bug).
   if (msg.channel_type && msg.platform_id) {
-    const mg = getMessagingGroupByPlatform(msg.channel_type, msg.platform_id);
+    let mg = getMessagingGroupByPlatform(msg.channel_type, msg.platform_id);
+    if (!mg) {
+      // The captured platform_id no longer resolves. The known cause is a
+      // start-token placeholder rebound to the real chat AFTER an in-flight
+      // container stamped this outbound with the (now consumed)
+      // `<channel>:<token>` placeholder id (#1068). The session still points at
+      // the same messaging_groups row (its id is stable across the rebind), so
+      // re-address to that row's CURRENT platform_id instead of failing
+      // permanently. Guarded on a same-channel match so we never silently
+      // redirect a genuinely mis-addressed message to the origin chat.
+      const origin = session.messaging_group_id ? getMessagingGroup(session.messaging_group_id) : undefined;
+      if (origin && origin.channel_type === msg.channel_type && origin.platform_id !== msg.platform_id) {
+        log.warn('Outbound platform_id no longer resolves — re-addressing to the session origin chat', {
+          messageId: msg.id,
+          stale: redactPlatformId(msg.channel_type, msg.platform_id),
+          rebound: redactPlatformId(origin.channel_type, origin.platform_id),
+        });
+        msg.platform_id = origin.platform_id;
+        mg = origin;
+      }
+    }
     if (!mg) {
       throw new Error(`unknown messaging group for ${msg.channel_type}/${msg.platform_id} (message ${msg.id})`);
     }

@@ -4,7 +4,17 @@
  * don't have to mock the filesystem or the container runner.
  */
 import Database from 'better-sqlite3';
-import { describe, expect, it } from 'vitest';
+import fs from 'fs';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const { PLACEHOLDER_TEST_DIR } = vi.hoisted(() => ({
+  PLACEHOLDER_TEST_DIR: '/tmp/nanoclaw-host-sweep-placeholder-test',
+}));
+
+vi.mock('./config.js', async () => {
+  const actual = await vi.importActual<typeof import('./config.js')>('./config.js');
+  return { ...actual, DATA_DIR: `${PLACEHOLDER_TEST_DIR}/data`, GROUPS_DIR: `${PLACEHOLDER_TEST_DIR}/groups` };
+});
 
 import { deleteOrphanProcessingClaims, getProcessingClaims } from './db/session-db.js';
 import {
@@ -12,8 +22,13 @@ import {
   CLAIM_STUCK_MS,
   _resetStuckProcessingRowsForTesting,
   decideStuckAction,
+  isPendingPlaceholderSession,
   parseSqliteUtc,
 } from './host-sweep.js';
+import { closeDb, initTestDb, runMigrations, createAgentGroup, createMessagingGroup } from './db/index.js';
+import { updateMessagingGroup } from './db/messaging-groups.js';
+import { resolveSession } from './session-manager.js';
+import { readDmRegistrations, writeDmRegistrations } from './dm-registrations.js';
 import type { Session } from './types.js';
 
 const BASE = Date.parse('2026-04-20T12:00:00.000Z');
@@ -332,5 +347,68 @@ describe('parseSqliteUtc', () => {
     // bare string returns different values depending on the host TZ.)
     const bare = '2026-04-20T12:00:00';
     expect(parseSqliteUtc(bare)).toBe(Date.parse(bare + 'Z'));
+  });
+});
+
+describe('isPendingPlaceholderSession (#1068)', () => {
+  const TOKEN_PID = 'telegram:tok_a1b2c3d4e5f6';
+  const BOUND_PID = 'telegram:-5467520989';
+
+  beforeEach(() => {
+    if (fs.existsSync(PLACEHOLDER_TEST_DIR)) fs.rmSync(PLACEHOLDER_TEST_DIR, { recursive: true });
+    fs.mkdirSync(`${PLACEHOLDER_TEST_DIR}/data`, { recursive: true });
+    const db = initTestDb();
+    runMigrations(db);
+    createAgentGroup({
+      id: 'ag-1',
+      name: 'Teen',
+      folder: 'pan-teen-fid',
+      agent_provider: null,
+      created_at: new Date().toISOString(),
+    });
+    createMessagingGroup({
+      id: 'mg-1',
+      channel_type: 'telegram',
+      platform_id: TOKEN_PID,
+      name: 'Teen',
+      is_group: 0,
+      unknown_sender_policy: 'public',
+      created_at: new Date().toISOString(),
+    });
+    writeDmRegistrations({
+      [TOKEN_PID]: {
+        groupName: 'pan-teen-fid',
+        channel: 'telegram',
+        address: 'tok_a1b2c3d4e5f6',
+        registeredAt: new Date().toISOString(),
+        requireOptIn: true,
+      },
+    });
+  });
+
+  afterEach(() => {
+    closeDb();
+    if (fs.existsSync(PLACEHOLDER_TEST_DIR)) fs.rmSync(PLACEHOLDER_TEST_DIR, { recursive: true });
+  });
+
+  it('is true for a session bound to an unredeemed start-token placeholder (do not wake)', () => {
+    const { session } = resolveSession('ag-1', 'mg-1', null, 'shared');
+    expect(isPendingPlaceholderSession(session)).toBe(true);
+  });
+
+  it('is false after the token is redeemed (rebind flips platform_id + activatedAt → wake normally)', () => {
+    const { session } = resolveSession('ag-1', 'mg-1', null, 'shared');
+    // Simulate tryActivateStartToken: rebind the row in place + stamp the reg.
+    updateMessagingGroup('mg-1', { platform_id: BOUND_PID, is_group: 1 });
+    const regs = readDmRegistrations();
+    regs[TOKEN_PID] = { ...regs[TOKEN_PID], activatedAt: new Date().toISOString(), boundPlatformId: BOUND_PID };
+    writeDmRegistrations(regs);
+    // The session row still references mg-1, which now carries the bound chat.
+    expect(isPendingPlaceholderSession(session)).toBe(false);
+  });
+
+  it('is false for a session with no messaging group', () => {
+    const orphan = { messaging_group_id: null } as unknown as Session;
+    expect(isPendingPlaceholderSession(orphan)).toBe(false);
   });
 });
