@@ -26,7 +26,11 @@
  *     stay redacted. This is the prod-safe "what's really in the prompt" tier.
  *   - `full`: everything, including dialogue and tool I/O. Intended for the test
  *     environment (synthetic teens), never teen prod.
- * Trace structure is always sent. Thinking blocks are NEVER sent at any tier.
+ * Trace structure is always sent. Thinking blocks (the agent's internal
+ * reasoning) ship ONLY at `full`; at `redacted`/`system` a length-tagged
+ * placeholder records their presence without the content. A `has_thinking`
+ * boolean in each generation's metadata is sent at every tier, so the existence
+ * of reasoning is always visible even when its text is withheld.
  * `LANGFUSE_LOG_PROMPTS=1` is kept as a back-compat alias for `full`.
  */
 
@@ -357,6 +361,14 @@ export function buildTracePayloads(turns: Turn[], ctx: TraceContext): TracePaylo
       const assistantText = textOf(a);
       if (assistantText) lastAssistantText = assistantText;
 
+      // Internal reasoning: joined thinking-block text for this assistant message.
+      // Ships in the generation metadata, but only at `full` (redact length-tags
+      // it below that). `has_thinking` records its presence at every tier.
+      const thinkingText = blocks(a)
+        .filter((b) => b.type === 'thinking' && typeof b.thinking === 'string')
+        .map((b) => b.thinking as string)
+        .join('\n\n');
+
       const tools: ToolPayload[] = blocks(a)
         .filter((b) => b.type === 'tool_use')
         .map((b) => ({
@@ -388,6 +400,8 @@ export function buildTracePayloads(turns: Turn[], ctx: TraceContext): TracePaylo
           cache_read_input_tokens: u?.cache_read_input_tokens,
           cache_creation_input_tokens: u?.cache_creation_input_tokens,
           tool_count: tools.length,
+          has_thinking: thinkingText.length > 0,
+          ...(thinkingText ? { thinking: redact(thinkingText, ctx.logLevel) } : {}),
         },
         tools,
       };

@@ -311,14 +311,36 @@ describe('buildTracePayloads — mapping + privacy', () => {
     expect(String(red.metadata.injected_messages)).not.toContain('onboarding');
   });
 
-  it('NEVER includes thinking-block text — even with logPrompts on', () => {
+  it('includes thinking-block text ONLY at the full tier; length-tags it below', () => {
     const content =
       userLine('hi', 'u1') + '\n' +
       assistantLine({ uuid: 'a1', thinking: 'SECRET internal reasoning about the teen', text: 'hello there' }) + '\n';
     const turns = parseTranscriptTurns(content, 0).turns;
-    const blob = JSON.stringify(buildTracePayloads(turns, { sessionId: 's', logLevel: 'full' }));
-    expect(blob).not.toContain('SECRET');
-    expect(blob).toContain('hello there'); // assistant text still flows at the full tier
+
+    const full = JSON.stringify(buildTracePayloads(turns, { sessionId: 's', logLevel: 'full' }));
+    expect(full).toContain('SECRET');       // reasoning flows at full (test tier)
+    expect(full).toContain('hello there');  // assistant text flows at full too
+
+    for (const logLevel of ['redacted', 'system'] as const) {
+      const blob = JSON.stringify(buildTracePayloads(turns, { sessionId: 's', logLevel }));
+      expect(blob).not.toContain('SECRET');           // content withheld below full
+      expect(blob).toMatch(/\[redacted: \d+ chars\]/); // ...presence still length-tagged
+    }
+  });
+
+  it('always reports thinking PRESENCE via has_thinking metadata, at every tier', () => {
+    const withThink = parseTranscriptTurns(
+      userLine('hi', 'u1') + '\n' + assistantLine({ uuid: 'a1', thinking: 'reasoning', text: 'hello' }) + '\n', 0,
+    ).turns;
+    for (const logLevel of ['redacted', 'system', 'full'] as const) {
+      const [trace] = buildTracePayloads(withThink, { sessionId: 's', logLevel });
+      expect(trace.generations[0].metadata.has_thinking).toBe(true);
+    }
+    const noThink = parseTranscriptTurns(
+      userLine('hi', 'u2') + '\n' + assistantLine({ uuid: 'a2', text: 'hi' }) + '\n', 0,
+    ).turns;
+    const [trace] = buildTracePayloads(noThink, { sessionId: 's', logLevel: 'full' });
+    expect(trace.generations[0].metadata.has_thinking).toBe(false);
   });
 
   it('omits userId when the caller does not supply one (privacy default)', () => {
