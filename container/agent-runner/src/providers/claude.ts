@@ -18,6 +18,15 @@ import {
   type SystemPromptFiles,
 } from './langfuse-trace.js';
 import type { AgentProvider, AgentQuery, McpServerConfig, ProviderEvent, ProviderOptions, QueryInput } from './types.js';
+import {
+  TURN_RECORD_FILENAME,
+  INITIAL_TURN_RECORD_STATE,
+  turnRecordLines,
+  truncateOnInit,
+  appendTurnRecordLines,
+  abortedLine,
+  type TurnRecordState,
+} from './turn-record.js';
 
 function log(msg: string): void {
   console.error(`[claude-provider] ${msg}`);
@@ -482,11 +491,31 @@ export class ClaudeProvider implements AgentProvider {
 
     let aborted = false;
 
+    // TurnRecord (#1241): one producer of a canonical per-turn record, written
+    // incrementally so downstream consumers (Pan's response-reasoning capture)
+    // never depend on transcript-flush timing relative to hooks. `turnRecordState`
+    // is shared with abort() below via this closure, mirroring `aborted`.
+    const turnRecordPath = path.join(input.cwd, TURN_RECORD_FILENAME);
+    let turnRecordState: TurnRecordState = INITIAL_TURN_RECORD_STATE;
+
+    function recordTurn(message: unknown): void {
+      try {
+        const rec = turnRecordLines(message, turnRecordState, new Date().toISOString());
+        turnRecordState = rec.state;
+        if (rec.truncate) truncateOnInit(turnRecordPath);
+        appendTurnRecordLines(turnRecordPath, rec.lines);
+      } catch (err) {
+        // Loud but non-fatal — a turn-record write must never break the turn.
+        log(`turn-record: append failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
     async function* translateEvents(): AsyncGenerator<ProviderEvent> {
       let messageCount = 0;
       for await (const message of sdkResult) {
         if (aborted) return;
         messageCount++;
+        recordTurn(message);
 
         // Yield activity for every SDK event so the poll loop knows the agent is working
         yield { type: 'activity' };
@@ -519,6 +548,11 @@ export class ClaudeProvider implements AgentProvider {
       abort: () => {
         aborted = true;
         stream.end();
+        try {
+          appendTurnRecordLines(turnRecordPath, [abortedLine(turnRecordState, new Date().toISOString())]);
+        } catch (err) {
+          log(`turn-record: aborted append failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
       },
     };
   }
