@@ -181,7 +181,7 @@ function formatSingleChat(msg: MessageInRow): string {
   const replyPrefix = formatReplyContext(content.replyTo);
   const attachmentsSuffix = formatAttachments(content.attachments);
 
-  const fromAttr = originAttr(msg);
+  const fromAttr = originAttr(msg, content);
 
   return `<message${idAttr}${fromAttr} sender="${escapeXml(sender)}" time="${escapeXml(time)}"${replyAttr}>${replyPrefix}${escapeXml(text)}${attachmentsSuffix}</message>`;
 }
@@ -190,10 +190,20 @@ function formatSingleChat(msg: MessageInRow): string {
  * Build a ` from="destination_name"` attribute string from a message's routing
  * fields. Shared by all formatters so the agent always knows where a message
  * originated — critical for explicit addressing.
+ *
+ * Precedence: the receiver's own named destination edge wins (it is the handle
+ * the agent replies to). For agent-to-agent messages where the receiver has NO
+ * edge back to the sender (a hub group deliberately not wired to message its
+ * senders), fall back to the host-stamped `origin_folder` in the content
+ * envelope (agent-route.ts stampOriginFolder — host-authoritative, spoof-proof)
+ * before rendering an unactionable `unknown:agent:<id>`.
  */
-function originAttr(msg: MessageInRow): string {
+function originAttr(msg: MessageInRow, content?: any): string {
   const fromDest = findByRouting(msg.channel_type, msg.platform_id);
   if (fromDest) return ` from="${escapeXml(fromDest.name)}"`;
+  if (typeof content?.origin_folder === 'string' && content.origin_folder.length > 0) {
+    return ` from="${escapeXml(content.origin_folder)}"`;
+  }
   if (msg.channel_type || msg.platform_id) {
     return ` from="unknown:${escapeXml(msg.channel_type || '')}:${escapeXml(msg.platform_id || '')}"`;
   }
