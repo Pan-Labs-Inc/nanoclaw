@@ -185,6 +185,15 @@ export async function routeAgentMessage(msg: RoutableAgentMessage, session: Sess
   // read the bytes — they live in a session dir it doesn't mount.
   const forwardedContent = forwardFileAttachments(msg, a2aMsgId, session, targetAgentGroupId, targetSession.id);
 
+  // Stamp the SOURCE group's folder into the content envelope so the receiving
+  // agent can identify who sent this even when it has no named destination edge
+  // back to the sender (formatter.ts originAttr falls back to this before
+  // rendering an unactionable `unknown:agent:<id>`). Host-authoritative: any
+  // agent-supplied origin_folder is overwritten — an agent must never be able
+  // to spoof its origin.
+  const sourceFolder = getAgentGroup(session.agent_group_id)?.folder ?? null;
+  const stampedContent = stampOriginFolder(forwardedContent, sourceFolder);
+
   writeSessionMessage(targetAgentGroupId, targetSession.id, {
     id: a2aMsgId,
     kind: 'chat',
@@ -192,7 +201,7 @@ export async function routeAgentMessage(msg: RoutableAgentMessage, session: Sess
     platformId: session.agent_group_id,
     channelType: 'agent',
     threadId: null,
-    content: forwardedContent,
+    content: stampedContent,
     sourceSessionId: session.id,
   });
   log.info('Agent message routed', {
@@ -204,6 +213,28 @@ export async function routeAgentMessage(msg: RoutableAgentMessage, session: Sess
   });
   const fresh = getSession(targetSession.id);
   if (fresh) await wakeContainer(fresh);
+}
+
+/**
+ * Stamp the source group's folder into an a2a content envelope as
+ * `origin_folder`, overwriting any pre-existing value (the field is
+ * host-authoritative). Non-JSON content is wrapped as `{ text }` first —
+ * the same shape parseContent (formatter.ts) produces for plain text, so
+ * the receiving agent's rendered text is unchanged.
+ */
+export function stampOriginFolder(contentStr: string, folder: string | null): string {
+  if (!folder) return contentStr;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(contentStr);
+  } catch {
+    parsed = { text: contentStr };
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    parsed = { text: contentStr };
+  }
+  (parsed as Record<string, unknown>).origin_folder = folder;
+  return JSON.stringify(parsed);
 }
 
 /**

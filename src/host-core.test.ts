@@ -1001,6 +1001,47 @@ describe('agent-to-agent routing', () => {
     expect(rows[0].channel_type).toBe('agent');
     expect(rows[0].platform_id).toBe('ag-pa');
     expect(JSON.parse(rows[0].content).text).toBe('research this');
+    // Host stamps the SOURCE group's folder so a receiver with no named edge
+    // back to the sender can still identify it (formatter originAttr fallback).
+    expect(JSON.parse(rows[0].content).origin_folder).toBe('pa-agent');
+  });
+
+  it('A2A origin_folder is host-authoritative — an agent-supplied value is overwritten (anti-spoof)', async () => {
+    const { routeAgentMessage } = await import('./modules/agent-to-agent/agent-route.js');
+
+    const { session: paSlackSession } = resolveSession('ag-pa', 'mg-slack', null, 'shared');
+
+    await routeAgentMessage(
+      {
+        id: 'out-a2a-spoof',
+        platform_id: 'ag-researcher',
+        // A compromised agent tries to masquerade as another family's group.
+        content: JSON.stringify({ text: 'alert', origin_folder: 'pan-teen-someoneelse' }),
+        in_reply_to: null,
+      },
+      paSlackSession,
+    );
+
+    const { getSessionsByAgentGroup } = await import('./db/sessions.js');
+    const researcherSessions = getSessionsByAgentGroup('ag-researcher');
+    const rDb = new Database(inboundDbPath('ag-researcher', researcherSessions[0].id));
+    const rows = rDb.prepare('SELECT content FROM messages_in').all() as Array<{ content: string }>;
+    rDb.close();
+
+    const stamped = rows.map((r) => JSON.parse(r.content)).find((c) => c.text === 'alert');
+    expect(stamped.origin_folder).toBe('pa-agent');
+  });
+
+  it('A2A plain-text content is wrapped {text, origin_folder} without altering the rendered text', async () => {
+    const { stampOriginFolder } = await import('./modules/agent-to-agent/agent-route.js');
+
+    // Unit-level: non-JSON content wraps into the same shape parseContent
+    // (formatter) produces for plain text, so rendering is unchanged.
+    const wrapped = JSON.parse(stampOriginFolder('just words', 'pa-agent'));
+    expect(wrapped).toEqual({ text: 'just words', origin_folder: 'pa-agent' });
+
+    // And a null folder (unknown source group) leaves content untouched.
+    expect(stampOriginFolder('{"text":"x"}', null)).toBe('{"text":"x"}');
   });
 
   it('A2A return path routes to originating session, not newest (#2332)', async () => {

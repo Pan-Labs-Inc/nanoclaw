@@ -183,3 +183,30 @@ describe('stripInternalTags', () => {
     );
   });
 });
+
+describe('a2a origin fallback (host-stamped origin_folder)', () => {
+  function insertA2a(id: string, content: object) {
+    getInboundDb()
+      .prepare(
+        `INSERT INTO messages_in (id, kind, timestamp, status, content, channel_type, platform_id)
+         VALUES (?, 'chat', ?, 'pending', ?, 'agent', 'ag-1783274410756-htoytt')`,
+      )
+      .run(id, new Date().toISOString(), JSON.stringify(content));
+  }
+
+  it('renders from= with the host-stamped origin_folder when the receiver has no named edge back to the sender', () => {
+    // A hub receiver (e.g. a notification router) deliberately has no
+    // destination row naming its senders — pre-fix this rendered
+    // from="unknown:agent:<ag-id>", which no receiving agent can act on.
+    insertA2a('a2a-1', { text: '{"template":"first_touch_alert"}', origin_folder: 'pan-teen-fam1a2b3c' });
+    const result = formatMessages(getPendingMessages());
+    expect(result).toContain('from="pan-teen-fam1a2b3c"');
+    expect(result).not.toContain('unknown:agent');
+  });
+
+  it('still falls back to unknown:agent:<id> when no origin_folder is present', () => {
+    insertA2a('a2a-2', { text: 'hello' });
+    const result = formatMessages(getPendingMessages());
+    expect(result).toContain('from="unknown:agent:ag-1783274410756-htoytt"');
+  });
+});
