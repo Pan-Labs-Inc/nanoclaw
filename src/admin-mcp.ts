@@ -384,26 +384,33 @@ function dmStatusTool(args: Record<string, unknown>) {
   let lastControlEvent: { keyword: string; at: string } | null = null;
   let activationState: 'pending' | 'active' | 'suppressed' = 'active';
 
+  // Activation truth is `activatedAt`, stamped by the channel-agnostic start-token
+  // core at opt-in (#1018) — the SAME field the host-sweep wake gate reads
+  // (isUnredeemedStartTokenPlaceholder), so dm_status and the wake gate can never
+  // disagree. Every born-suppressed channel (telegram, cli, sms) flows through it.
+  if (reg?.requireOptIn) {
+    if (reg.activatedAt) {
+      activationState = 'active';
+      lastControlEvent = { keyword: 'start', at: reg.activatedAt };
+    } else {
+      activationState = 'pending';
+    }
+  }
+
+  // SMS carries a CTIA opt-out overlay with no generic-channel analog: a STOP
+  // suppresses the already-activated channel; a later START re-activates it. This
+  // is transport-specific and layers OVER the activation state above — it never
+  // decides pending vs active. Keyed by the real phone the placeholder was bound
+  // to at activation (boundPlatformId), falling back to the queried address.
   if (channel === 'sms') {
     const store = readSmsOptOutStore();
-    const key = address.trim();
+    const key = (reg?.boundPlatformId ?? address).trim();
     const event = store.controlEvents?.[key];
     if (event) {
       lastControlEvent = { keyword: event.keyword, at: event.at ?? event.receivedAt };
     }
     if (store.optedOut?.[key]) {
       activationState = 'suppressed';
-    } else if (reg?.requireOptIn) {
-      const hasActivatingEvent =
-        event && event.action === 'start' && (event.at ?? event.receivedAt) > (reg.registeredAt ?? '');
-      activationState = hasActivatingEvent ? 'active' : 'pending';
-    }
-  } else if (reg?.requireOptIn) {
-    if (reg.activatedAt) {
-      activationState = 'active';
-      lastControlEvent = { keyword: 'start', at: reg.activatedAt };
-    } else {
-      activationState = 'pending';
     }
   }
 
