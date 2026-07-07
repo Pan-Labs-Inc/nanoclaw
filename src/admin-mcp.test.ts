@@ -21,6 +21,7 @@ import { getContainerConfig } from './db/container-configs.js';
 import { getAgentGroupByFolder, createAgentGroup } from './db/agent-groups.js';
 import { getMessagingGroupByPlatform } from './db/messaging-groups.js';
 import { materializeContainerJson } from './container-config.js';
+import { readDmRegistrations, writeDmRegistrations } from './dm-registrations.js';
 import { createAdminMcpHandler } from './admin-mcp.js';
 
 const TOKEN = 'admin-mcp-token-1234567890abcdef1234';
@@ -590,34 +591,32 @@ describe('Admin MCP endpoint', () => {
       expect(result.lastControlEvent).toBeNull();
     });
 
-    it('returns activationState active after START event with at strictly > registeredAt', async () => {
+    it('returns activationState active once the start-token core stamps activatedAt (#1018/#1419)', async () => {
       const handler = createAdminMcpHandler({ token: TOKEN });
-      const regRes = await callTool(handler, 'dm_register', {
+      await callTool(handler, 'dm_register', {
         channel: 'sms',
         address: '+15553333333',
         groupName: 'activategroup',
         require_opt_in: true,
       });
-      const reg = await toolResult(regRes);
-      const registeredAt = reg.registeredAt as string;
 
-      const startAt = new Date(Date.parse(registeredAt) + 1000).toISOString();
-      const storeDir = path.join(TEST_DIR, 'data');
-      fs.mkdirSync(storeDir, { recursive: true });
-      fs.writeFileSync(
-        path.join(storeDir, 'sms-opt-outs.json'),
-        JSON.stringify({
-          optedOut: {},
-          controlEvents: { '+15553333333': { action: 'start', keyword: 'START', receivedAt: startAt, at: startAt } },
-        }),
-        'utf8',
-      );
+      // Simulate the shared start-token core activating the born-suppressed reg:
+      // it stamps activatedAt (+ boundPlatformId = the real phone). This is the
+      // SAME field the host-sweep wake gate reads — dm_status must agree, so the
+      // two can never disagree the way #1419 exposed.
+      const regs = readDmRegistrations();
+      regs['+15553333333'] = {
+        ...regs['+15553333333'],
+        activatedAt: new Date().toISOString(),
+        boundPlatformId: '+15553333333',
+      };
+      writeDmRegistrations(regs);
 
       const res = await callTool(handler, 'dm_status', { channel: 'sms', address: '+15553333333' });
       expect(res.status).toBe(200);
       const result = await toolResult(res);
       expect(result.activationState).toBe('active');
-      expect((result.lastControlEvent as Record<string, string>).keyword).toBe('START');
+      expect((result.lastControlEvent as Record<string, string>).keyword).toBe('start');
     });
 
     it('backward compat: lastControlEvent.at falls back to receivedAt when at field absent', async () => {
@@ -648,7 +647,7 @@ describe('Admin MCP endpoint', () => {
       expect((result.lastControlEvent as Record<string, string>).keyword).toBe('STOP');
     });
 
-    it('stale START event (at === registeredAt) leaves activationState pending', async () => {
+    it('a START control event alone does NOT activate — only activatedAt does (#1419)', async () => {
       const handler = createAdminMcpHandler({ token: TOKEN });
       const regRes = await callTool(handler, 'dm_register', {
         channel: 'sms',
@@ -657,9 +656,13 @@ describe('Admin MCP endpoint', () => {
         require_opt_in: true,
       });
       const reg = await toolResult(regRes);
-      const registeredAt = reg.registeredAt as string;
+      const startAt = new Date(Date.parse(reg.registeredAt as string) + 1000).toISOString();
 
-      // Event at === registeredAt is NOT strictly greater — must leave pending
+      // A bare CTIA START is recorded in the control store, but under the unified
+      // model it is NOT an activation credential — only `activatedAt` (stamped by
+      // the token core after a `START <token>`) activates. This is exactly the
+      // divergence #1419 closed: the control store can no longer flip the state
+      // the wake gate reads. So a control event with no activatedAt stays pending.
       const storeDir = path.join(TEST_DIR, 'data');
       fs.mkdirSync(storeDir, { recursive: true });
       fs.writeFileSync(
@@ -667,7 +670,7 @@ describe('Admin MCP endpoint', () => {
         JSON.stringify({
           optedOut: {},
           controlEvents: {
-            '+15555555555': { action: 'start', keyword: 'START', receivedAt: registeredAt, at: registeredAt },
+            '+15555555555': { action: 'start', keyword: 'START', receivedAt: startAt, at: startAt },
           },
         }),
         'utf8',
@@ -679,27 +682,34 @@ describe('Admin MCP endpoint', () => {
       expect(result.activationState).toBe('pending');
     });
 
-    it('stale START event (at < registeredAt) leaves activationState pending', async () => {
+    it('opted-out overlays suppressed over an activated SMS registration (CTIA)', async () => {
       const handler = createAdminMcpHandler({ token: TOKEN });
-      const regRes = await callTool(handler, 'dm_register', {
+      await callTool(handler, 'dm_register', {
         channel: 'sms',
         address: '+15556666666',
-        groupName: 'oldkeywordgroup',
+        groupName: 'suppgroup',
         require_opt_in: true,
       });
-      const reg = await toolResult(regRes);
-      const registeredAt = reg.registeredAt as string;
 
-      // Event at < registeredAt (previous consent episode) — must leave pending
-      const oldAt = new Date(Date.parse(registeredAt) - 5000).toISOString();
+      // Activated (activatedAt stamped), then the user texted STOP: the CTIA
+      // opt-out overlay must report suppressed, keyed by the bound phone — while
+      // activation itself (activatedAt) remains intact for a later re-subscribe.
+      const regs = readDmRegistrations();
+      regs['+15556666666'] = {
+        ...regs['+15556666666'],
+        activatedAt: new Date().toISOString(),
+        boundPlatformId: '+15556666666',
+      };
+      writeDmRegistrations(regs);
+
       const storeDir = path.join(TEST_DIR, 'data');
       fs.mkdirSync(storeDir, { recursive: true });
       fs.writeFileSync(
         path.join(storeDir, 'sms-opt-outs.json'),
         JSON.stringify({
-          optedOut: {},
+          optedOut: { '+15556666666': { optedOutAt: new Date().toISOString() } },
           controlEvents: {
-            '+15556666666': { action: 'start', keyword: 'START', receivedAt: oldAt, at: oldAt },
+            '+15556666666': { action: 'stop', keyword: 'STOP', receivedAt: new Date().toISOString() },
           },
         }),
         'utf8',
@@ -708,7 +718,7 @@ describe('Admin MCP endpoint', () => {
       const res = await callTool(handler, 'dm_status', { channel: 'sms', address: '+15556666666' });
       expect(res.status).toBe(200);
       const result = await toolResult(res);
-      expect(result.activationState).toBe('pending');
+      expect(result.activationState).toBe('suppressed');
     });
   });
 });

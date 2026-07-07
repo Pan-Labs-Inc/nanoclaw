@@ -20,6 +20,7 @@ import { openInboundDb, resolveSession, writeSessionMessage } from '../session-m
 import { registerWebhookHandler, unregisterWebhookHandler, type WebhookHandler } from '../webhook-server.js';
 import type { ChannelAdapter, ChannelSetup, InboundMessage, OutboundMessage } from './adapter.js';
 import { registerChannelAdapter } from './channel-registry.js';
+import { tryActivateStartToken } from './start-token.js';
 
 const CHANNEL_TYPE = 'sms';
 const WEBHOOK_NAME = 'sms';
@@ -459,9 +460,10 @@ function seedControlEventAwareness(
   let trigger: 0 | 1 = 1;
 
   if (action === 'start') {
-    if (prevState === 'pending') {
-      prompt = 'User sent START — SMS channel is now active';
-    } else if (prevState === 'suppressed') {
+    // pending→active activation is owned by the start-token core
+    // (seedActivationAwareness). A bare CTIA START can only RE-activate a
+    // channel the user previously STOPped — never redeem a pending persona.
+    if (prevState === 'suppressed') {
       prompt = 'User sent START — SMS channel re-activated after STOP';
       trigger = 0;
     }
@@ -525,8 +527,28 @@ export function createSmsWebhookHandler(config: SmsConfig, hostConfig: ChannelSe
     if (!inbound.from) return textResponse('Missing From', 400);
     if (!E164_PHONE_RE.test(inbound.from)) return textResponse('Invalid From', 400);
 
+    // Channel-agnostic start-token activation (#1018 SMS slice). A `START <token>`
+    // (or a bare token) binds this phone to a born-suppressed `sms:<token>`
+    // registration: the shared core rebinds the placeholder onto the real phone
+    // platform id, stamps `activatedAt` (the SINGLE activation truth the host-sweep
+    // wake gate + dm_status read — SMS no longer has its own activation store), and
+    // seeds the awareness task that drives Day-1. The token is the consent-gated
+    // credential (surfaced only after parent consent), so this is what gates a teen
+    // from self-activating. Checked BEFORE control keywords: a bare CTIA `START`
+    // (< 8 chars) can never match a token, so it only un-suppresses a prior opt-out
+    // — it can never activate a never-redeemed persona. Consumed on match; the
+    // token message never reaches an agent (the seeded task greets instead).
+    const activation = tryActivateStartToken({ text: inbound.body, channel: CHANNEL_TYPE, platformId: inbound.from });
+    if (activation) {
+      log.info('SMS start-token activation', {
+        boundPlatformId: redactSmsPhone(activation.boundPlatformId),
+        replay: activation.replay,
+      });
+      return twimlResponse();
+    }
+
     // Capture activation state before keyword processing so seeding can determine
-    // the pre-transition state (pending/suppressed/active).
+    // the pre-transition state (suppressed/active).
     const preControlState = resolveActivationState(inbound.from, config);
 
     // Control keywords are handled before agent routing. If Twilio Advanced
