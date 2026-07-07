@@ -100,6 +100,27 @@ export function unregisterWebhookHandler(name: string): void {
   if (entry?.kind === 'native') routes.delete(name);
 }
 
+// ── /api/{name} — non-webhook HTTP surfaces ──────────────────────────────────
+//
+// This server is the host's HTTP server; the /webhook/ prefix carries channel
+// callbacks and inherits that name for legacy reasons (admin-mcp lives there
+// as a published path). New request/response surfaces (the read API) mount
+// under /api/ so their paths say what they are.
+
+const apiRoutes = new Map<string, WebhookHandler>();
+
+/** Register a native handler under /api/{name}. Starts the server lazily. */
+export function registerApiHandler(name: string, handler: WebhookHandler): void {
+  apiRoutes.set(name, handler);
+  ensureServer();
+  log.info('API handler registered', { api: name, path: `/api/${name}` });
+}
+
+/** Remove an /api/{name} handler. */
+export function unregisterApiHandler(name: string): void {
+  apiRoutes.delete(name);
+}
+
 function ensureServer(): void {
   if (server) return;
 
@@ -107,6 +128,31 @@ function ensureServer(): void {
 
   server = http.createServer(async (req, res) => {
     const url = req.url || '/';
+
+    // Route: /api/{name}
+    const apiMatch = url.match(/^\/api\/([^/?]+)/);
+    if (apiMatch) {
+      const apiHandler = apiRoutes.get(apiMatch[1]);
+      if (!apiHandler) {
+        res.writeHead(404, { 'Content-Type': 'text/plain' });
+        res.end(`Unknown api: ${apiMatch[1]}`);
+        return;
+      }
+      try {
+        const webReq = await toWebRequest(req);
+        const webRes = await apiHandler(webReq, {
+          waitUntil: (p: Promise<unknown>) => {
+            p.catch(() => {});
+          },
+        });
+        await fromWebResponse(webRes, res);
+      } catch (err) {
+        log.error('API handler error', { api: apiMatch[1], url: req.url, err });
+        res.writeHead(500, { 'Content-Type': 'text/plain' });
+        res.end('Internal Server Error');
+      }
+      return;
+    }
 
     // Route: /webhook/{adapterName}
     const match = url.match(/^\/webhook\/([^/?]+)/);
