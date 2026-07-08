@@ -11,7 +11,8 @@ name: images
 
 on:
   push:
-    branches: [main]
+    # TEMP: feature branch listed only to prove the pipeline pre-merge; remove.
+    branches: [main, feature/host-dockerfile]
     tags: ["pan-v*"]
   workflow_dispatch:
 
