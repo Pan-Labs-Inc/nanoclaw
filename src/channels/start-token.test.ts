@@ -487,6 +487,75 @@ describe('canned opener + immediate wake (#1420)', () => {
   });
 });
 
+describe('wake_on_redeem: false — registration stays dormant until the first real inbound', () => {
+  // Pan's parent Day-1 (pantalaimon#1451): the redemption wake's warming turn
+  // streams for ~70s and the user's reply to the instant opener arrives
+  // mid-stream, where the poll-loop pushes it into the active query — no
+  // UserPromptSubmit, no turn capture. A registrar that wants the first
+  // CONTAINER turn to be the user's own first message opts out of every
+  // pre-seeded prompt: no register-time /welcome task, no redemption awareness
+  // task, no redemption wake. The instant opener is unaffected (the channel
+  // adapter delivers it with no container in the loop).
+  const OPENER = "Hi Pat — it's Pan. quick security check: what's your teen's first name?";
+
+  function registerDormant(): Promise<Record<string, unknown>> {
+    return callTool('dm_register', {
+      channel: 'telegram',
+      address: START_TOKEN,
+      groupName: GROUP,
+      require_opt_in: true,
+      canned_opener: OPENER,
+      wake_on_redeem: false,
+    });
+  }
+
+  const activate = () =>
+    tryActivateStartToken({
+      text: `/start ${START_TOKEN}`,
+      channel: 'telegram',
+      botUsername: 'pan_bot',
+      platformId: 'telegram:123456789',
+    });
+
+  it('persists wakeOnRedeem:false on the registration and echoes it in the result', async () => {
+    const res = await registerDormant();
+    expect(res.wakeOnRedeem).toBe(false);
+    expect(readDmRegistrations()[`telegram:${START_TOKEN}`].wakeOnRedeem).toBe(false);
+  });
+
+  it('seeds NO tasks at register or redemption, never wakes — but still delivers the opener', async () => {
+    await registerDormant();
+    expect(readSeededTasks()).toHaveLength(0); // no register-time /welcome task
+
+    const act = activate();
+    expect(act?.replay).toBe(false);
+    expect(act?.openerText).toBe(OPENER);      // instant opener unaffected
+    expect(readSeededTasks()).toHaveLength(0); // no redemption awareness task
+    expect(vi.mocked(wakeContainer)).not.toHaveBeenCalled();
+  });
+
+  it('activation still rebinds + stamps the registration (dormant ≠ inert)', async () => {
+    await registerDormant();
+    activate();
+    const reg = readDmRegistrations()[`telegram:${START_TOKEN}`];
+    expect(reg.activatedAt).toBeTruthy();
+    expect(reg.boundPlatformId).toBe('telegram:123456789');
+  });
+
+  it('default (flag absent) keeps the #1420 behavior: tasks seeded + immediate wake', async () => {
+    await callTool('dm_register', {
+      channel: 'telegram',
+      address: START_TOKEN,
+      groupName: GROUP,
+      require_opt_in: true,
+      canned_opener: OPENER,
+    });
+    activate();
+    expect(readSeededTasks().length).toBeGreaterThan(0);
+    expect(vi.mocked(wakeContainer)).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('dm_status telegram activation states', () => {
   it('reports pending before activation and active (with start control event) after', async () => {
     await registerPending();
