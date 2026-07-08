@@ -1,0 +1,14 @@
+# Runtime state — arrives as bind mounts, never baked into the image.
+data
+store
+.env
+.env.*
+
+# Build outputs and dependency trees — rebuilt inside the image.
+node_modules
+dist
+
+# Not part of the host runtime.
+.git
+launchd
+docs
