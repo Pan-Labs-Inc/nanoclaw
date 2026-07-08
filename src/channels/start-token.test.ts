@@ -17,6 +17,13 @@ vi.mock('../config.js', async () => {
   };
 });
 
+// tryActivateStartToken wakes the bound session's container at redemption
+// (#1420) — stub it so tests never attempt a real docker spawn.
+vi.mock('../container-runner.js', () => ({
+  wakeContainer: vi.fn().mockResolvedValue(true),
+}));
+
+import { wakeContainer } from '../container-runner.js';
 import { closeDb, initTestDb, runMigrations } from '../db/index.js';
 import {
   getMessagingGroupByPlatform,
@@ -89,6 +96,7 @@ beforeEach(() => {
   if (fs.existsSync(TEST_DIR)) fs.rmSync(TEST_DIR, { recursive: true, force: true });
   fs.mkdirSync(TEST_DIR, { recursive: true });
   runMigrations(initTestDb());
+  vi.mocked(wakeContainer).mockClear();
 });
 
 afterEach(() => {
@@ -386,6 +394,96 @@ describe('tryActivateStartToken — generic channel (cli)', () => {
       }),
     ).toBeNull();
     expect(readDmRegistrations()[`cli:${START_TOKEN}`].activatedAt).toBeUndefined();
+  });
+});
+
+describe('canned opener + immediate wake (#1420)', () => {
+  const OPENER = "hey Jamie — it's Pan. your mom set this up; reply whenever.";
+
+  function registerWithOpener(): Promise<Record<string, unknown>> {
+    return callTool('dm_register', {
+      channel: 'telegram',
+      address: START_TOKEN,
+      groupName: GROUP,
+      require_opt_in: true,
+      canned_opener: OPENER,
+    });
+  }
+
+  const activate = (platformId = 'telegram:123456789') =>
+    tryActivateStartToken({
+      text: `/start ${START_TOKEN}`,
+      channel: 'telegram',
+      botUsername: 'pan_bot',
+      platformId,
+    });
+
+  it('dm_register persists canned_opener and reports it in the result', async () => {
+    const result = await registerWithOpener();
+    expect(result.cannedOpener).toBe(true);
+    expect(readDmRegistrations()[`telegram:${START_TOKEN}`].cannedOpener).toBe(OPENER);
+  });
+
+  it('dm_register without canned_opener reports cannedOpener:false and persists none', async () => {
+    const result = await registerPending();
+    expect(result.cannedOpener).toBe(false);
+    expect(readDmRegistrations()[`telegram:${START_TOKEN}`].cannedOpener).toBeUndefined();
+  });
+
+  it('rejects an oversize canned_opener loudly instead of persisting it', async () => {
+    await expect(
+      callTool('dm_register', {
+        channel: 'telegram',
+        address: START_TOKEN,
+        groupName: GROUP,
+        require_opt_in: true,
+        canned_opener: 'x'.repeat(8193),
+      }),
+    ).rejects.toThrow(/canned_opener too long/);
+    expect(readDmRegistrations()[`telegram:${START_TOKEN}`]).toBeUndefined();
+  });
+
+  it('clean bind returns the registration opener; replay returns null (never re-delivered)', async () => {
+    await registerWithOpener();
+    const first = activate();
+    expect(first?.replay).toBe(false);
+    expect(first?.openerText).toBe(OPENER);
+
+    const replay = activate();
+    expect(replay?.replay).toBe(true);
+    expect(replay?.openerText).toBeNull();
+  });
+
+  it('clean bind without a registered opener returns openerText null', async () => {
+    await registerPending();
+    expect(activate()?.openerText).toBeNull();
+  });
+
+  it('wakes the container immediately on a clean bind WITH an opener', async () => {
+    await registerWithOpener();
+    activate();
+    expect(vi.mocked(wakeContainer)).toHaveBeenCalledTimes(1);
+  });
+
+  it('wakes the container immediately on a clean bind WITHOUT an opener — the #1420 sweep-wait fix', async () => {
+    await registerPending();
+    activate();
+    expect(vi.mocked(wakeContainer)).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not wake on a replay or a non-match', async () => {
+    await registerWithOpener();
+    activate();
+    vi.mocked(wakeContainer).mockClear();
+
+    activate(); // same-chat replay
+    tryActivateStartToken({
+      text: 'hey there',
+      channel: 'telegram',
+      botUsername: 'pan_bot',
+      platformId: 'telegram:123456789',
+    });
+    expect(vi.mocked(wakeContainer)).not.toHaveBeenCalled();
   });
 });
 

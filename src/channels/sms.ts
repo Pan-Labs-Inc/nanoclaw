@@ -543,8 +543,12 @@ export function createSmsWebhookHandler(config: SmsConfig, hostConfig: ChannelSe
       log.info('SMS start-token activation', {
         boundPlatformId: redactSmsPhone(activation.boundPlatformId),
         replay: activation.replay,
+        openerDelivered: Boolean(activation.openerText),
       });
-      return twimlResponse();
+      // The registration's canned opener rides the TwiML reply — instant, zero
+      // extra API calls. openerText is null on replay, so a re-sent token can
+      // never re-deliver the opener.
+      return twimlResponse(activation.openerText ?? undefined);
     }
 
     // Capture activation state before keyword processing so seeding can determine

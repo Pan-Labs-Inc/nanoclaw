@@ -56,7 +56,8 @@ const toolDescriptions: Record<string, string> = {
   group_file_put: 'Atomically write a file into a NanoClaw group directory.',
   group_mount_set:
     'Write the additional-mounts container config for a group. Each mount entry may set sourcePath (relative, no traversal) to mount a subdirectory of the source group instead of the whole group dir.',
-  dm_register: 'Wire a channel address as a NanoClaw direct-message group.',
+  dm_register:
+    'Wire a channel address as a NanoClaw direct-message group. Optionally carries canned_opener, a verbatim message the channel adapter delivers as the instant reply at start-token redemption.',
   shared_base_write: 'Compose content into container/CLAUDE.md at a marker point.',
   dm_status: 'Read the activation state and last control event for a registered DM address.',
 };
@@ -264,6 +265,12 @@ function dmRegisterTool(args: Record<string, unknown>) {
   if (!isValidGroupFolder(groupName)) throw new Error(`Invalid group folder name: ${groupName}`);
   const displayName = optionalStringArg(args, 'displayName');
   const requireOptIn = booleanArg(args, 'require_opt_in', false);
+  // Optional instant-reply opener delivered at start-token redemption. Length
+  // guard refuses garbage loudly rather than persisting an unbounded payload.
+  const cannedOpener = optionalStringArg(args, 'canned_opener');
+  if (cannedOpener !== undefined && cannedOpener.length > 8192) {
+    throw new Error(`canned_opener too long (${cannedOpener.length} chars, max 8192)`);
+  }
 
   const platformId = namespacedPlatformId(channel, address);
   const now = new Date().toISOString();
@@ -323,7 +330,14 @@ function dmRegisterTool(args: Record<string, unknown>) {
 
   // Persist registration metadata for dm_status and the N6 freshness state machine
   const regs = readDmRegistrations();
-  regs[platformId] = { groupName, channel, address, registeredAt: now, requireOptIn };
+  regs[platformId] = {
+    groupName,
+    channel,
+    address,
+    registeredAt: now,
+    requireOptIn,
+    ...(cannedOpener !== undefined ? { cannedOpener } : {}),
+  };
   writeDmRegistrations(regs);
 
   if (newlyWired) {
@@ -349,6 +363,9 @@ function dmRegisterTool(args: Record<string, unknown>) {
     messagingGroupId: messagingGroup.id,
     newlyWired,
     requireOptIn,
+    // Registrars assert this flag to detect a NanoClaw that predates the
+    // canned-opener feature (which would silently drop the arg).
+    cannedOpener: cannedOpener !== undefined,
     registeredAt: now,
   };
 }

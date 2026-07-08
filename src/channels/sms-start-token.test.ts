@@ -33,6 +33,12 @@ vi.mock('../config.js', async () => {
   };
 });
 
+// tryActivateStartToken wakes the bound session's container at redemption
+// (#1420) — stub it so tests never attempt a real docker spawn.
+vi.mock('../container-runner.js', () => ({
+  wakeContainer: vi.fn().mockResolvedValue(true),
+}));
+
 import { closeDb, initTestDb, runMigrations } from '../db/index.js';
 import { getMessagingGroupByPlatform } from '../db/messaging-groups.js';
 import { readDmRegistrations } from '../dm-registrations.js';
@@ -188,5 +194,33 @@ describe('SMS webhook — start-token activation (#1419)', () => {
     const res = await postInbound('START some-other-unknown-token');
     expect(res.status).toBe(200);
     expect(readDmRegistrations()[`sms:${START_TOKEN}`].activatedAt).toBeUndefined();
+  });
+
+  it('delivers the registration canned opener as the TwiML reply; replay gets an empty response (#1420)', async () => {
+    await dmRegister({
+      channel: 'sms',
+      address: START_TOKEN,
+      groupName: GROUP,
+      require_opt_in: true,
+      canned_opener: "hey — it's Pan",
+    });
+
+    const res = await postInbound(`START ${START_TOKEN}`);
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    // Opener rides the webhook reply itself (instant, zero extra API calls),
+    // XML-escaped for TwiML.
+    expect(body).toContain('<Message>');
+    expect(body).toContain('hey — it&apos;s Pan');
+
+    // A re-sent token never re-delivers the opener.
+    const replay = await postInbound(`START ${START_TOKEN}`);
+    expect(await replay.text()).toBe('<Response></Response>');
+  });
+
+  it('activation without a canned opener keeps the empty TwiML reply', async () => {
+    await registerPendingSms();
+    const res = await postInbound(`START ${START_TOKEN}`);
+    expect(await res.text()).toBe('<Response></Response>');
   });
 });

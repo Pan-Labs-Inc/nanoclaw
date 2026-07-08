@@ -139,11 +139,17 @@ function isChatIdCommand(text: string, botUsername: string): boolean {
 }
 
 /**
- * Confirm a successful /start-token activation. Best-effort — the agent's
- * own greeting follows via the seeded awareness task; this just gives the
- * user instant feedback that the tap worked.
+ * Confirm a successful /start-token activation. Best-effort — this gives the
+ * user instant feedback that the tap worked. When the registration carries a
+ * canned opener, THAT is the confirmation (delivered verbatim); otherwise the
+ * generic text stands in and the agent's own greeting follows via the seeded
+ * awareness task.
  */
-async function sendStartTokenConfirmation(token: string, platformId: string): Promise<void> {
+async function sendStartTokenConfirmation(
+  token: string,
+  platformId: string,
+  openerText?: string | null,
+): Promise<void> {
   const chatId = platformId.split(':').slice(1).join(':');
   if (!chatId) return;
   try {
@@ -152,7 +158,7 @@ async function sendStartTokenConfirmation(token: string, platformId: string): Pr
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         chat_id: chatId,
-        text: "You're connected! You'll get a message here shortly.",
+        text: openerText || "You're connected! You'll get a message here shortly.",
       }),
     });
     if (!res.ok) {
@@ -191,7 +197,7 @@ function createPairingInterceptor(
       const activation = tryActivateStartToken({ text, channel: 'telegram', botUsername, platformId });
       if (activation) {
         if (!activation.replay) {
-          await sendStartTokenConfirmation(token, platformId);
+          await sendStartTokenConfirmation(token, platformId, activation.openerText);
         }
         return;
       }

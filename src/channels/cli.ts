@@ -240,7 +240,17 @@ function createAdapter(): ChannelAdapter {
       log.info('CLI start-token activation', {
         boundPlatformId: activation.boundPlatformId,
         replay: activation.replay,
+        openerDelivered: Boolean(activation.openerText),
       });
+      // Deliver the registration's canned opener as the instant activation
+      // reply (openerText is null on replay). Best-effort, same as deliver().
+      if (activation.openerText && client) {
+        try {
+          client.write(JSON.stringify({ text: activation.openerText }) + '\n');
+        } catch (err) {
+          log.warn('CLI: failed to write start-token opener to client', { err });
+        }
+      }
       return;
     }
 

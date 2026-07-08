@@ -28,6 +28,7 @@ import {
   updateMessagingGroup,
   deleteMessagingGroup,
 } from '../db/messaging-groups.js';
+import { wakeContainer } from '../container-runner.js';
 import { readDmRegistrations, writeDmRegistrations, type DmRegistration } from '../dm-registrations.js';
 import { log } from '../log.js';
 import { isTelegramGroupPlatformId } from '../platform-id.js';
@@ -100,6 +101,12 @@ export interface StartTokenActivation {
   boundPlatformId: string;
   /** True when this was a re-send of an already-consumed token from the same chat. */
   replay: boolean;
+  /**
+   * The registration's canned opener, for the channel adapter to deliver via
+   * its instant-reply path in place of the generic confirmation. Null when the
+   * registration carries none, and on replay (never re-send the opener).
+   */
+  openerText: string | null;
 }
 
 /**
@@ -126,7 +133,13 @@ export function tryActivateStartToken(input: {
     // Re-send of a consumed token. Same chat: swallow (idempotent). Different
     // chat: stale/forwarded token — pass through.
     if (reg.boundPlatformId === input.platformId) {
-      return { groupName: reg.groupName, tokenPlatformId, boundPlatformId: input.platformId, replay: true };
+      return {
+        groupName: reg.groupName,
+        tokenPlatformId,
+        boundPlatformId: input.platformId,
+        replay: true,
+        openerText: null,
+      };
     }
     log.warn('start-token re-use from a different chat ignored', {
       channel: input.channel,
@@ -195,7 +208,13 @@ export function tryActivateStartToken(input: {
     isGroup,
   });
 
-  return { groupName: reg.groupName, tokenPlatformId, boundPlatformId: input.platformId, replay: false };
+  return {
+    groupName: reg.groupName,
+    tokenPlatformId,
+    boundPlatformId: input.platformId,
+    replay: false,
+    openerText: reg.cannedOpener ?? null,
+  };
 }
 
 /**
@@ -225,6 +244,12 @@ function seedActivationAwareness(
         }),
         trigger: 1,
       });
+      // #1420: wake immediately rather than leaving the seeded task for the
+      // next host-sweep tick (up to 60s away) — the user just opted in and is
+      // watching the chat. The group was rebound above, so the sweep's
+      // placeholder guard no longer applies. Fire-and-forget: wakeContainer
+      // never throws and dedups concurrent wakes.
+      void wakeContainer(session);
     }
   } catch (err) {
     log.warn('Failed to seed start-token activation awareness', { groupName, channel, err });
