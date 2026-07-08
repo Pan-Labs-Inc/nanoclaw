@@ -48,6 +48,7 @@ const POSTHOG_KEYS = [
   'POSTHOG_API_KEY',
   'POSTHOG_HOST',
   'POSTHOG_ENVIRONMENT_LABEL',
+  'POSTHOG_DEBUG_EVENTS',
 ];
 
 registerProviderContainerConfig('claude', (ctx) => {

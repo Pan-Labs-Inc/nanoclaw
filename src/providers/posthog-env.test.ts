@@ -16,6 +16,7 @@ const KEYS = {
   POSTHOG_API_KEY: 'phc_test',
   POSTHOG_HOST: 'https://us.i.posthog.com',
   POSTHOG_ENVIRONMENT_LABEL: 'staging',
+  POSTHOG_DEBUG_EVENTS: '1',
 };
 
 describe('buildPosthogContainerEnv — gating', () => {
@@ -41,7 +42,13 @@ describe('buildPosthogContainerEnv — credential passthrough', () => {
       POSTHOG_API_KEY: 'phc_test',
       POSTHOG_HOST: 'https://us.i.posthog.com',
       POSTHOG_ENVIRONMENT_LABEL: 'staging',
+      POSTHOG_DEBUG_EVENTS: '1',
     });
+  });
+
+  it('drops POSTHOG_DEBUG_EVENTS when blank (the noise dial defaults off, Pan #1447)', () => {
+    const env = buildPosthogContainerEnv({ POSTHOG_API_KEY: 'phc_test', POSTHOG_DEBUG_EVENTS: '  ' });
+    expect(env).not.toHaveProperty('POSTHOG_DEBUG_EVENTS');
   });
 
   it('trims surrounding whitespace and a trailing slash on the host', () => {
@@ -64,6 +71,7 @@ describe('buildPosthogContainerEnv — credential passthrough', () => {
     const env = buildPosthogContainerEnv({ ...KEYS, POSTHOG_PROJECT_ID: 'leak', SECRET: 'no' } as Record<string, string>);
     expect(Object.keys(env).sort()).toEqual([
       'POSTHOG_API_KEY',
+      'POSTHOG_DEBUG_EVENTS',
       'POSTHOG_ENVIRONMENT_LABEL',
       'POSTHOG_HOST',
     ]);
