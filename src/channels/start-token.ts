@@ -199,7 +199,19 @@ export function tryActivateStartToken(input: {
   regs[tokenPlatformId] = { ...reg, activatedAt: now, boundPlatformId: input.platformId };
   writeDmRegistrations(regs);
 
-  seedActivationAwareness(reg.groupName, placeholder.id, input.channel, input.platformId, now);
+  // wake_on_redeem: false (per-registration) = stay dormant until the user's
+  // first real inbound — no awareness task, no wake. The first container turn
+  // is then the user's own message, which opens a clean per-turn hook cycle
+  // instead of being pushed mid-stream into a long warming turn
+  // (pantalaimon#1451). The instant opener below is unaffected.
+  if (reg.wakeOnRedeem !== false) {
+    seedActivationAwareness(reg.groupName, placeholder.id, input.channel, input.platformId, now);
+  } else {
+    log.info('start-token activation is dormant (wake_on_redeem: false) — first spawn rides the first inbound', {
+      channel: input.channel,
+      groupName: reg.groupName,
+    });
+  }
 
   log.info('start-token activation accepted', {
     channel: input.channel,

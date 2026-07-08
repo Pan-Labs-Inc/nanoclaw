@@ -57,7 +57,7 @@ const toolDescriptions: Record<string, string> = {
   group_mount_set:
     'Write the additional-mounts container config for a group. Each mount entry may set sourcePath (relative, no traversal) to mount a subdirectory of the source group instead of the whole group dir.',
   dm_register:
-    'Wire a channel address as a NanoClaw direct-message group. Optionally carries canned_opener, a verbatim message the channel adapter delivers as the instant reply at start-token redemption.',
+    'Wire a channel address as a NanoClaw direct-message group. Optionally carries canned_opener, a verbatim message the channel adapter delivers as the instant reply at start-token redemption, and wake_on_redeem (default true; false = stay dormant until the first real inbound — no welcome/awareness tasks, no redemption wake).',
   shared_base_write: 'Compose content into container/CLAUDE.md at a marker point.',
   dm_status: 'Read the activation state and last control event for a registered DM address.',
 };
@@ -271,6 +271,10 @@ function dmRegisterTool(args: Record<string, unknown>) {
   if (cannedOpener !== undefined && cannedOpener.length > 8192) {
     throw new Error(`canned_opener too long (${cannedOpener.length} chars, max 8192)`);
   }
+  // wake_on_redeem: false = fully dormant until the user's first real inbound
+  // (no /welcome task, no awareness task, no redemption wake) — see the
+  // DmRegistration field doc. Default true preserves existing behavior.
+  const wakeOnRedeem = booleanArg(args, 'wake_on_redeem', true);
 
   const platformId = namespacedPlatformId(channel, address);
   const now = new Date().toISOString();
@@ -337,10 +341,14 @@ function dmRegisterTool(args: Record<string, unknown>) {
     registeredAt: now,
     requireOptIn,
     ...(cannedOpener !== undefined ? { cannedOpener } : {}),
+    ...(wakeOnRedeem === false ? { wakeOnRedeem } : {}),
   };
   writeDmRegistrations(regs);
 
-  if (newlyWired) {
+  // Dormant registrations (wake_on_redeem: false) seed NOTHING: a pending
+  // /welcome task would batch with the user's first message at first spawn,
+  // defeating the whole point of dormancy (the user's message opens turn 1).
+  if (newlyWired && wakeOnRedeem !== false) {
     const { session } = resolveSession(agentGroup.id, messagingGroup.id, null, 'shared');
     writeSessionMessage(agentGroup.id, session.id, {
       id: generateId('onboard'),
@@ -366,6 +374,9 @@ function dmRegisterTool(args: Record<string, unknown>) {
     // Registrars assert this flag to detect a NanoClaw that predates the
     // canned-opener feature (which would silently drop the arg).
     cannedOpener: cannedOpener !== undefined,
+    // Echoed so registrars can assert the dormancy request was honored (a
+    // NanoClaw predating the flag would silently seed + wake).
+    wakeOnRedeem,
     registeredAt: now,
   };
 }

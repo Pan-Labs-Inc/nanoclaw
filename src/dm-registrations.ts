@@ -35,6 +35,18 @@ export type DmRegistration = {
    * The registrar owns the content; NanoClaw just carries and returns it.
    */
   cannedOpener?: string;
+  /**
+   * When false, the registration stays DORMANT until the user's first real
+   * inbound message: no register-time /welcome task, no redemption-time
+   * awareness task, no redemption wake — the first container turn is the
+   * user's own first message. The instant-reply opener is unaffected (the
+   * channel adapter delivers it with no container in the loop). Absent/true =
+   * the default seed-and-wake behavior. Registrars opt out when a long
+   * pre-warmed turn would collide with the user's reply to the opener
+   * (pantalaimon#1451: mid-stream messages are pushed into the active query
+   * and bypass per-turn hooks).
+   */
+  wakeOnRedeem?: boolean;
 };
 
 export function readDmRegistrations(): Record<string, DmRegistration> {
