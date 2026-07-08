@@ -23,6 +23,9 @@
  *   - POSTHOG_ENVIRONMENT_LABEL (optional — the event `environment` bucket; without
  *                               it every event mis-buckets to "local" even on
  *                               staging/production)
+ *   - POSTHOG_DEBUG_EVENTS     (optional — Pan's ops-noise dial, Pan #1447: truthy
+ *                               ships the debug-class plumbing events; absent, the
+ *                               in-container gates ship only the production set)
  */
 
 /**
@@ -44,6 +47,9 @@ export function buildPosthogContainerEnv(env: Record<string, string | undefined>
 
   const label = env.POSTHOG_ENVIRONMENT_LABEL?.trim();
   if (label) out.POSTHOG_ENVIRONMENT_LABEL = label;
+
+  const debugEvents = env.POSTHOG_DEBUG_EVENTS?.trim();
+  if (debugEvents) out.POSTHOG_DEBUG_EVENTS = debugEvents;
 
   return out;
 }
