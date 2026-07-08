@@ -28,6 +28,13 @@ export type DmRegistration = {
   activatedAt?: string;
   /** Real platform id the messaging group was rebound to at activation. */
   boundPlatformId?: string;
+  /**
+   * Optional opt-in confirmation message, registered as per-registration data
+   * and delivered VERBATIM by the channel adapter's instant-reply path at
+   * start-token redemption (in place of the generic "You're connected!" text).
+   * The registrar owns the content; NanoClaw just carries and returns it.
+   */
+  cannedOpener?: string;
 };
 
 export function readDmRegistrations(): Record<string, DmRegistration> {
