@@ -109,9 +109,9 @@ const ONECLI_GATEWAY_VERSION = '1.23.0';
 const ONECLI_CLI_FALLBACK_VERSION = '1.3.0';
 const ONECLI_CLI_REPO = 'onecli/onecli-cli';
 
-function installOnecliCliOnly(): { stdout: string; ok: boolean } {
+export function installOnecliCliOnly(): { stdout: string; ok: boolean } {
   const upstream = runInstall('curl -fsSL onecli.sh/cli/install | sh');
-  if (upstream.ok) return { stdout: upstream.stdout, ok: true };
+  if (upstream.ok && onecliVersion()) return { stdout: upstream.stdout, ok: true };
   const fallback = installOnecliCliDirect();
   return { stdout: upstream.stdout + (upstream.stderr ?? '') + '\n' + fallback.stdout, ok: fallback.ok };
 }
@@ -161,16 +161,20 @@ function installOnecli(): { stdout: string; ok: boolean } {
     return { stdout: stdout + (gw.stderr ?? ''), ok: false };
   }
 
-  // CLI install. The upstream script calls the GitHub releases API
-  // (api.github.com) to resolve the latest tag — which 403s anonymous
-  // callers after 60 requests/hour per IP. Try upstream first; on failure
-  // resolve the version ourselves (via HTTP redirect, which isn't
-  // API-throttled) and download the release archive directly.
+  // CLI install. Try upstream first; on failure resolve the version ourselves
+  // (via HTTP redirect) and download the release archive directly.
+  //
+  // `curl … | sh` reports SH's exit status, not curl's. When the download
+  // fails, sh reads empty stdin and exits 0 — so a green exit code does NOT
+  // mean the binary landed. Gate on the binary itself, otherwise a transient
+  // curl failure silently skips the direct-download fallback below and the
+  // step dies later with a misleading "not on PATH".
   const upstream = runInstall('curl -fsSL onecli.sh/cli/install | sh');
   stdout += upstream.stdout;
-  if (upstream.ok) return { stdout, ok: true };
+  if (upstream.ok && onecliVersion()) return { stdout, ok: true };
 
-  log.warn('Upstream CLI installer failed — falling back to direct download', {
+  log.warn('Upstream CLI installer produced no usable binary — falling back to direct download', {
+    exitOk: upstream.ok,
     stderr: upstream.stderr,
   });
   stdout += (upstream.stderr ?? '') + '\n';
@@ -392,6 +396,9 @@ export async function run(args: string[]): Promise<void> {
   log.info('Installing OneCLI gateway and CLI');
   const res = installOnecli();
   if (!res.ok) {
+    // The installer's captured output is the only record of WHY it failed —
+    // this step runs standalone (no auto.ts orchestrator, so no setup.log).
+    log.error('OneCLI installer output', { output: res.stdout });
     emitStatus('ONECLI', {
       INSTALLED: false,
       STATUS: 'failed',
@@ -401,6 +408,7 @@ export async function run(args: string[]): Promise<void> {
     process.exit(1);
   }
   if (!onecliVersion()) {
+    log.error('OneCLI installer output', { output: res.stdout });
     emitStatus('ONECLI', {
       INSTALLED: false,
       STATUS: 'failed',
