@@ -54,6 +54,7 @@ import './channels/index.js';
 // append registry-based modules. Imported for side effects (registrations).
 import './modules/index.js';
 import './admin-mcp.js';
+import './read-api.js';
 
 // CLI command barrel — populates the `ncl` registry before the CLI server
 // accepts connections.
