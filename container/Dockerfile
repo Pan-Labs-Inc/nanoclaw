@@ -10,7 +10,7 @@
 # bind mount at runtime (see src/container-runner.ts). Source-only changes
 # never require an image rebuild.
 
-FROM node:22-slim
+FROM node:24-slim
 
 # ---- Build-time arguments ----------------------------------------------------
 # CJK fonts add ~200MB. Opt in only if you render Chinese/Japanese/Korean text.
@@ -115,27 +115,10 @@ RUN --mount=type=cache,target=/root/.cache/pnpm \
 RUN printf '#!/bin/sh\nexec bun /app/src/cli/ncl.ts "$@"\n' > /usr/local/bin/ncl && \
     chmod +x /usr/local/bin/ncl
 
-# ---- better-sqlite3 for in-container hooks (Pan #751 P5 S5) -------------------
-# Pan's SLOW-lane projection hooks read the live session message DBs via
-# better-sqlite3 (createInContainerOpenSnapshot). The hooks run as
-# `node /workspace/agent/.hooks/*.js`, and Node resolves packages by walking
-# node_modules up the ancestor chain. CRUCIAL: at runtime /workspace (session
-# dir) AND /workspace/agent (group dir) are BIND MOUNTS (container-runner.ts),
-# so anything baked under /workspace is SHADOWED. The only ancestor node_modules
-# that survives is /node_modules (image root, never mounted) — Node's last-resort
-# resolution dir. Install there.
-#
-# Pinned to the host's version (package.json) so host + container agree. node 22
-# has a prebuilt binary (prebuild-install downloads it — no compiler in slim).
-# Staged in a temp dir then moved so better-sqlite3 AND its deps (bindings, …)
-# land together under /node_modules. OFF the safety hard-gate: after #751 P5 S2
-# the fast/safety path opens no snapshot, so this is a slow-lane-only need.
-RUN mkdir -p /opt/hookdeps && cd /opt/hookdeps && \
-    npm init -y >/dev/null 2>&1 && \
-    npm install --no-audit --no-fund better-sqlite3@11.10.0 && \
-    mv node_modules /node_modules && \
-    cd / && rm -rf /opt/hookdeps && \
-    node -e "require('/node_modules/better-sqlite3'); console.log('better-sqlite3 loads in /node_modules')"
+# (The former better-sqlite3 /node_modules staging layer — Pan #751 P5 S5 — is
+# gone: Pan's in-container hooks read session DBs via the node:sqlite BUILTIN
+# since Pan #1570, which is why the base image is node:24-slim — node:sqlite is
+# flag-gated below node 23.4. Nothing native ships for hooks anymore.)
 
 # ---- Entrypoint --------------------------------------------------------------
 COPY entrypoint.sh /app/entrypoint.sh
