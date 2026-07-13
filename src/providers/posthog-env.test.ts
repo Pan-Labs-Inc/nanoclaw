@@ -68,7 +68,10 @@ describe('buildPosthogContainerEnv — credential passthrough', () => {
   });
 
   it('emits NO other vars (no surprise passthrough)', () => {
-    const env = buildPosthogContainerEnv({ ...KEYS, POSTHOG_PROJECT_ID: 'leak', SECRET: 'no' } as Record<string, string>);
+    const env = buildPosthogContainerEnv({ ...KEYS, POSTHOG_PROJECT_ID: 'leak', SECRET: 'no' } as Record<
+      string,
+      string
+    >);
     expect(Object.keys(env).sort()).toEqual([
       'POSTHOG_API_KEY',
       'POSTHOG_DEBUG_EVENTS',

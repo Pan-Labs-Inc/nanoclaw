@@ -53,13 +53,11 @@ describe('activation is a single path (#1018/#1419)', () => {
     const writeForm = /\bactivatedAt\s*:/;
     const stampers = sourceFiles().filter((f) => {
       const body = readFileSync(resolve(SRC_ROOT, f), 'utf8');
-      return body
-        .split('\n')
-        .some((line) => {
-          const trimmed = line.trimStart();
-          if (trimmed.startsWith('*') || trimmed.startsWith('//')) return false; // skip comments
-          return writeForm.test(line);
-        });
+      return body.split('\n').some((line) => {
+        const trimmed = line.trimStart();
+        if (trimmed.startsWith('*') || trimmed.startsWith('//')) return false; // skip comments
+        return writeForm.test(line);
+      });
     });
     expect(
       stampers.sort(),

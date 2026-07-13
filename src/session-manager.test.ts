@@ -15,12 +15,7 @@ vi.mock('./config.js', async (importOriginal) => ({
 }));
 
 import { ensureSchema } from './db/session-db.js';
-import {
-  writeOutboundDirect,
-  openOutboundDb,
-  outboundDbPath,
-  sessionDir,
-} from './session-manager.js';
+import { writeOutboundDirect, openOutboundDb, outboundDbPath, sessionDir } from './session-manager.js';
 
 const AG = 'ag-writeoutbound-test';
 const SESS = 'sess-writeoutbound-test';
@@ -60,9 +55,7 @@ describe('writeOutboundDirect — host write reaches messages_out (readonly-open
     const db: Database.Database = openOutboundDb(AG, SESS);
     try {
       const row = db
-        .prepare(
-          'SELECT id, kind, platform_id, channel_type, content FROM messages_out WHERE id = ?',
-        )
+        .prepare('SELECT id, kind, platform_id, channel_type, content FROM messages_out WHERE id = ?')
         .get('host-send-test-1') as
         | { id: string; kind: string; platform_id: string; channel_type: string; content: string }
         | undefined;

@@ -11,12 +11,15 @@
  *
  *   Client → server:
  *     { "text": "user message" }                          # default — talk to cli/local
+ *     { "bind": { "platformId": "some-slot" } }           # hello — become the chat
+ *                                                         # client for cli/<some-slot>
  *     { "text": "...", "to": {"channelType": "discord",
  *                             "platformId": "discord:@me:149...",
  *                             "threadId": null} }         # route to a specific mg
  *     { "text": "...", "to": {...}, "reply_to": {...} }   # + redirect replies
  *   Server → client:
  *     { "text": "agent reply" }
+ *     { "ok": true, "bound": "some-slot" }                # bind acknowledgement
  *
  * The `to` and `reply_to` addressing is how admin transports (the bootstrap
  * script) inject messages targeting any wired channel. `reply_to` is a
@@ -28,6 +31,20 @@
  * "chat" connection closes the first with a "superseded" notice. Admin
  * route-opcode connections (`to` set) are one-shot and do NOT evict an
  * active chat client.
+ *
+ * Bound (per-slot) chat semantics: a connection whose first line is a
+ * `bind` hello becomes the chat client for `cli/<platformId>` — the exact
+ * analog of the default client, for a named slot. Plain `{ text }` lines on
+ * a bound connection route inbound with the bound platform id (including
+ * `start <token>` activation, which rebinds the registration onto that
+ * slot), and deliver() targets the bound socket for that platform id. N
+ * bound clients coexist — this is what lets N agent groups be exercised
+ * concurrently over one socket. Binding never touches the default chat
+ * client; a second bind for the SAME slot supersedes the first, mirroring
+ * the single-client rule per slot. The server acks a bind with
+ * `{ ok: true, bound: <platformId> }` so clients can distinguish a server
+ * that supports binding from one that would silently fall through to
+ * cli/local.
  *
  * deliver() silently no-ops when no client is connected. The outbound row
  * is already in outbound.db, so the message isn't lost — it just doesn't
@@ -52,6 +69,8 @@ function socketPath(): string {
 function createAdapter(): ChannelAdapter {
   let server: net.Server | null = null;
   let client: net.Socket | null = null;
+  // Per-slot chat clients, keyed by the platform id a connection bound to.
+  const boundClients = new Map<string, net.Socket>();
 
   const adapter: ChannelAdapter = {
     name: 'cli',
@@ -99,6 +118,14 @@ function createAdapter(): ChannelAdapter {
         }
         client = null;
       }
+      for (const sock of boundClients.values()) {
+        try {
+          sock.end();
+        } catch {
+          // swallow — teardown is best-effort
+        }
+      }
+      boundClients.clear();
       if (server) {
         await new Promise<void>((resolve) => {
           server!.close(() => resolve());
@@ -118,8 +145,9 @@ function createAdapter(): ChannelAdapter {
     },
 
     async deliver(platformId, _threadId, message: OutboundMessage): Promise<string | undefined> {
-      if (platformId !== PLATFORM_ID) return undefined;
-      if (!client) {
+      // A bound per-slot client wins; the default client serves only 'local'.
+      const target = boundClients.get(platformId) ?? (platformId === PLATFORM_ID ? client : null);
+      if (!target) {
         // No live terminal — outbound row is already persisted, so this
         // isn't a data loss. User will see it on the next connect cycle
         // (or never, if we don't add scroll-back). Not worth throwing.
@@ -128,7 +156,7 @@ function createAdapter(): ChannelAdapter {
       const text = extractText(message);
       if (text === null) return undefined;
       try {
-        client.write(JSON.stringify({ text }) + '\n');
+        target.write(JSON.stringify({ text }) + '\n');
       } catch (err) {
         log.warn('Failed to write to CLI client', { err });
       }
@@ -141,6 +169,9 @@ function createAdapter(): ChannelAdapter {
     // to be a routed (`to`-bearing) one-shot, we leave the existing chat
     // client in place. Only plain chat connections participate in supersede.
     let claimedChatSlot = false;
+    // The slot this connection bound to via a `bind` hello (null = default
+    // client semantics). Bound connections never touch the default chat slot.
+    let boundId: string | null = null;
 
     const claimChatSlot = () => {
       if (claimedChatSlot) return;
@@ -157,6 +188,36 @@ function createAdapter(): ChannelAdapter {
       log.info('CLI client connected');
     };
 
+    // Register this connection as the chat client for a named slot.
+    // Synchronous — a bind hello is fully applied before the next line on the
+    // same connection is processed, so hello-then-text framing can't race.
+    const bindSlot = (platformId: string) => {
+      const prev = boundClients.get(platformId);
+      if (prev && prev !== socket) {
+        try {
+          prev.write(JSON.stringify({ text: '[superseded by a newer client]' }) + '\n');
+          prev.end();
+        } catch {
+          // swallow
+        }
+      }
+      boundClients.set(platformId, socket);
+      boundId = platformId;
+      try {
+        socket.write(JSON.stringify({ ok: true, bound: platformId }) + '\n');
+      } catch (err) {
+        log.warn('CLI: failed to ack bind', { platformId, err });
+      }
+      log.info('CLI client bound', { platformId });
+    };
+
+    const conn = {
+      socket,
+      claimChatSlot,
+      bindSlot,
+      getBoundId: () => boundId,
+    };
+
     let buffer = '';
     socket.on('data', (chunk) => {
       buffer += chunk.toString('utf8');
@@ -165,13 +226,14 @@ function createAdapter(): ChannelAdapter {
         const line = buffer.slice(0, idx).trim();
         buffer = buffer.slice(idx + 1);
         if (!line) continue;
-        void handleLine(line, config, claimChatSlot);
+        void handleLine(line, config, conn);
       }
     });
 
     socket.on('close', () => {
       if (client === socket) client = null;
-      if (claimedChatSlot) log.info('CLI client disconnected');
+      if (boundId && boundClients.get(boundId) === socket) boundClients.delete(boundId);
+      if (claimedChatSlot || boundId) log.info('CLI client disconnected', boundId ? { boundId } : undefined);
     });
 
     socket.on('error', (err) => {
@@ -179,13 +241,23 @@ function createAdapter(): ChannelAdapter {
     });
   }
 
-  async function handleLine(line: string, config: ChannelSetup, claimChatSlot: () => void): Promise<void> {
+  async function handleLine(
+    line: string,
+    config: ChannelSetup,
+    conn: {
+      socket: net.Socket;
+      claimChatSlot: () => void;
+      bindSlot: (platformId: string) => void;
+      getBoundId: () => string | null;
+    },
+  ): Promise<void> {
     let payload: {
       text?: unknown;
       to?: unknown;
       reply_to?: unknown;
       sender?: unknown;
       senderId?: unknown;
+      bind?: unknown;
     };
     try {
       payload = JSON.parse(line);
@@ -193,6 +265,21 @@ function createAdapter(): ChannelAdapter {
       log.warn('CLI: ignoring non-JSON line from client', { line });
       return;
     }
+
+    // Bind hello — `{ bind: { platformId } }`. Hello-only lines: any `text` on
+    // the same line is ignored (send it as its own line, after the ack).
+    if (payload.bind !== undefined) {
+      const bind = payload.bind as Record<string, unknown> | null;
+      const platformId =
+        bind && typeof bind === 'object' && typeof bind.platformId === 'string' ? bind.platformId.trim() : '';
+      if (!platformId) {
+        log.warn('CLI: ignoring malformed bind hello', { line });
+        return;
+      }
+      conn.bindSlot(platformId);
+      return;
+    }
+
     if (typeof payload.text !== 'string' || payload.text.length === 0) return;
 
     const to = parseAddress(payload.to);
@@ -226,16 +313,20 @@ function createAdapter(): ChannelAdapter {
       return;
     }
 
-    // Plain chat — claim the slot (evicting any prior client) and route via
-    // the standard onInbound path (adapter injects its own channelType).
-    claimChatSlot();
+    // Plain chat. On a bound connection the message belongs to the bound slot;
+    // otherwise claim the default chat slot (evicting any prior client) and
+    // route to 'local'. Either way it goes via the standard onInbound path
+    // (adapter injects its own channelType).
+    const chatPlatformId = conn.getBoundId() ?? PLATFORM_ID;
+    if (!conn.getBoundId()) conn.claimChatSlot();
 
     // Channel-agnostic start-token activation (#1018): a `start <token>` (or a
     // bare token) binds this cli slot to a born-suppressed `cli:<token>`
-    // registration — rebinding its placeholder onto PLATFORM_ID ('local', the id
-    // plain chat routes to) and seeding the activation-awareness task that drives
-    // the greeting. The token message is consumed; it never reaches an agent.
-    const activation = tryActivateStartToken({ channel: 'cli', text: payload.text, platformId: PLATFORM_ID });
+    // registration — rebinding its placeholder onto the id plain chat on this
+    // connection routes to ('local', or the bound slot) and seeding the
+    // activation-awareness task that drives the greeting. The token message is
+    // consumed; it never reaches an agent.
+    const activation = tryActivateStartToken({ channel: 'cli', text: payload.text, platformId: chatPlatformId });
     if (activation) {
       log.info('CLI start-token activation', {
         boundPlatformId: activation.boundPlatformId,
@@ -243,10 +334,11 @@ function createAdapter(): ChannelAdapter {
         openerDelivered: Boolean(activation.openerText),
       });
       // Deliver the registration's canned opener as the instant activation
-      // reply (openerText is null on replay). Best-effort, same as deliver().
-      if (activation.openerText && client) {
+      // reply (openerText is null on replay) to the connection that redeemed
+      // the token. Best-effort, same as deliver().
+      if (activation.openerText) {
         try {
-          client.write(JSON.stringify({ text: activation.openerText }) + '\n');
+          conn.socket.write(JSON.stringify({ text: activation.openerText }) + '\n');
         } catch (err) {
           log.warn('CLI: failed to write start-token opener to client', { err });
         }
@@ -255,14 +347,14 @@ function createAdapter(): ChannelAdapter {
     }
 
     try {
-      await config.onInbound(PLATFORM_ID, null, {
+      await config.onInbound(chatPlatformId, null, {
         id: `cli-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         kind: 'chat',
         timestamp: new Date().toISOString(),
         content: {
           text: payload.text,
           sender: 'cli',
-          senderId: `cli:${PLATFORM_ID}`,
+          senderId: `cli:${chatPlatformId}`,
         },
       });
     } catch (err) {

@@ -62,11 +62,15 @@ describe('buildLangfuseContainerEnv — credential passthrough (no OTEL)', () =>
   });
 
   it('defaults the host to Langfuse Cloud when LANGFUSE_HOST is unset', () => {
-    expect(buildLangfuseContainerEnv({ ...KEYS, LANGFUSE_HOST: undefined }).LANGFUSE_HOST).toBe('https://cloud.langfuse.com');
+    expect(buildLangfuseContainerEnv({ ...KEYS, LANGFUSE_HOST: undefined }).LANGFUSE_HOST).toBe(
+      'https://cloud.langfuse.com',
+    );
   });
 
   it('strips a trailing slash from LANGFUSE_HOST', () => {
-    expect(buildLangfuseContainerEnv({ ...KEYS, LANGFUSE_HOST: 'https://us.cloud.langfuse.com/' }).LANGFUSE_HOST).toBe('https://us.cloud.langfuse.com');
+    expect(buildLangfuseContainerEnv({ ...KEYS, LANGFUSE_HOST: 'https://us.cloud.langfuse.com/' }).LANGFUSE_HOST).toBe(
+      'https://us.cloud.langfuse.com',
+    );
   });
 });
 
@@ -76,13 +80,21 @@ describe('buildLangfuseContainerEnv — environment', () => {
   });
 
   it('forwards a lowercased, validated environment', () => {
-    expect(buildLangfuseContainerEnv({ ...KEYS, LANGFUSE_ENVIRONMENT: 'Production' }).LANGFUSE_ENVIRONMENT).toBe('production');
+    expect(buildLangfuseContainerEnv({ ...KEYS, LANGFUSE_ENVIRONMENT: 'Production' }).LANGFUSE_ENVIRONMENT).toBe(
+      'production',
+    );
   });
 
   it('drops an environment that violates Langfuse naming', () => {
-    expect(buildLangfuseContainerEnv({ ...KEYS, LANGFUSE_ENVIRONMENT: 'prod env' }).LANGFUSE_ENVIRONMENT).toBeUndefined();
-    expect(buildLangfuseContainerEnv({ ...KEYS, LANGFUSE_ENVIRONMENT: 'langfuse-x' }).LANGFUSE_ENVIRONMENT).toBeUndefined();
-    expect(buildLangfuseContainerEnv({ ...KEYS, LANGFUSE_ENVIRONMENT: 'x'.repeat(41) }).LANGFUSE_ENVIRONMENT).toBeUndefined();
+    expect(
+      buildLangfuseContainerEnv({ ...KEYS, LANGFUSE_ENVIRONMENT: 'prod env' }).LANGFUSE_ENVIRONMENT,
+    ).toBeUndefined();
+    expect(
+      buildLangfuseContainerEnv({ ...KEYS, LANGFUSE_ENVIRONMENT: 'langfuse-x' }).LANGFUSE_ENVIRONMENT,
+    ).toBeUndefined();
+    expect(
+      buildLangfuseContainerEnv({ ...KEYS, LANGFUSE_ENVIRONMENT: 'x'.repeat(41) }).LANGFUSE_ENVIRONMENT,
+    ).toBeUndefined();
   });
 });
 

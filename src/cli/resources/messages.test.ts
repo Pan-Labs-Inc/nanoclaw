@@ -220,17 +220,11 @@ describe('messages send — folder → channel resolution + outbound payload', (
   });
 
   it('requires --folder and --text (invalid-args)', async () => {
-    const noText = await dispatch(
-      { id: 'r4', command: 'messages-send', args: { folder: 'x' } },
-      { caller: 'host' },
-    );
+    const noText = await dispatch({ id: 'r4', command: 'messages-send', args: { folder: 'x' } }, { caller: 'host' });
     expect(noText.ok).toBe(false);
     if (!noText.ok) expect(noText.error.code).toBe('invalid-args');
 
-    const noFolder = await dispatch(
-      { id: 'r5', command: 'messages-send', args: { text: 'x' } },
-      { caller: 'host' },
-    );
+    const noFolder = await dispatch({ id: 'r5', command: 'messages-send', args: { text: 'x' } }, { caller: 'host' });
     expect(noFolder.ok).toBe(false);
     if (!noFolder.ok) expect(noFolder.error.code).toBe('invalid-args');
   });

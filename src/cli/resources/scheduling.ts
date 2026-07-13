@@ -70,9 +70,7 @@ function parseScheduleArgs(raw: Record<string, unknown>): ScheduleArgs {
 /** A task verb writes into the caller's OWN session DB — reject any other caller. */
 function requireSessionDb(ctx: CallerContext): BetterSqlite3Database.Database {
   if (ctx.caller !== 'agent' || !ctx.inDb) {
-    throw new Error(
-      'task verbs are only callable in-container (they need the session DB transport)',
-    );
+    throw new Error('task verbs are only callable in-container (they need the session DB transport)');
   }
   return ctx.inDb;
 }
