@@ -529,7 +529,7 @@ describe('wake_on_redeem: false — registration stays dormant until the first r
 
     const act = activate();
     expect(act?.replay).toBe(false);
-    expect(act?.openerText).toBe(OPENER);      // instant opener unaffected
+    expect(act?.openerText).toBe(OPENER); // instant opener unaffected
     expect(readSeededTasks()).toHaveLength(0); // no redemption awareness task
     expect(vi.mocked(wakeContainer)).not.toHaveBeenCalled();
   });

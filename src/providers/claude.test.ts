@@ -22,11 +22,13 @@ const cfg = getProviderContainerConfig('claude');
 
 function run(hostEnv: Record<string, string | undefined>) {
   if (!cfg) throw new Error('claude provider container config not registered');
-  return cfg({
-    sessionDir: '/tmp/v2-sessions/sess',
-    agentGroupId: 'pan-teen-test',
-    hostEnv: hostEnv as NodeJS.ProcessEnv,
-  }).env ?? {};
+  return (
+    cfg({
+      sessionDir: '/tmp/v2-sessions/sess',
+      agentGroupId: 'pan-teen-test',
+      hostEnv: hostEnv as NodeJS.ProcessEnv,
+    }).env ?? {}
+  );
 }
 
 describe('claude provider container config — PostHog passthrough wiring (#961)', () => {

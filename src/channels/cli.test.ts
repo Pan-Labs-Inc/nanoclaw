@@ -73,7 +73,8 @@ class TestClient {
     for (;;) {
       const hit = this.lines.find(pred);
       if (hit) return hit;
-      if (Date.now() > deadline) throw new Error(`no matching line within ${timeoutMs}ms — got ${JSON.stringify(this.lines)}`);
+      if (Date.now() > deadline)
+        throw new Error(`no matching line within ${timeoutMs}ms — got ${JSON.stringify(this.lines)}`);
       await new Promise<void>((resolve) => {
         const t = setTimeout(resolve, 50);
         this.waiters.push(() => {

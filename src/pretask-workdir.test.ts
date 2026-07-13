@@ -19,14 +19,14 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
  */
 describe('container WORKDIR matches the agent CWD (pre-task script context)', () => {
   const dockerfile = readFileSync(resolve(REPO_ROOT, 'container/Dockerfile'), 'utf8');
-  const indexTs = readFileSync(
-    resolve(REPO_ROOT, 'container/agent-runner/src/index.ts'),
-    'utf8',
-  );
+  const indexTs = readFileSync(resolve(REPO_ROOT, 'container/agent-runner/src/index.ts'), 'utf8');
 
   const workdir = /^WORKDIR\s+(\S+)\s*$/m.exec(
     // last WORKDIR in the file wins at build time
-    dockerfile.split('\n').filter((l) => /^WORKDIR\s/.test(l)).pop() ?? '',
+    dockerfile
+      .split('\n')
+      .filter((l) => /^WORKDIR\s/.test(l))
+      .pop() ?? '',
   )?.[1];
   const cwd = /const\s+CWD\s*=\s*['"]([^'"]+)['"]/.exec(indexTs)?.[1];
 

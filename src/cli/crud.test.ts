@@ -36,16 +36,16 @@ describe('genericCreate — caller-supplied id (ncl-groups-create defect a)', ()
   });
 
   it('rejects a digit-leading id (OneCLI gateway would 400 it at spawn)', async () => {
-    await expect(
-      createGroup({ id: '1bad-id', name: 'Teen', folder: 'pan-teen-test-cc22dd' }),
-    ).rejects.toThrow(/start with a lowercase letter/i);
+    await expect(createGroup({ id: '1bad-id', name: 'Teen', folder: 'pan-teen-test-cc22dd' })).rejects.toThrow(
+      /start with a lowercase letter/i,
+    );
     expect(getAgentGroupByFolder('pan-teen-test-cc22dd')).toBeUndefined();
   });
 
   it('rejects an id with uppercase / illegal characters', async () => {
-    await expect(
-      createGroup({ id: 'AG_Bad', name: 'Teen', folder: 'pan-teen-test-ee33ff' }),
-    ).rejects.toThrow(/lowercase letters, digits, and hyphens/i);
+    await expect(createGroup({ id: 'AG_Bad', name: 'Teen', folder: 'pan-teen-test-ee33ff' })).rejects.toThrow(
+      /lowercase letters, digits, and hyphens/i,
+    );
   });
 
   it('auto-mints an id when none is supplied (unchanged default path)', async () => {

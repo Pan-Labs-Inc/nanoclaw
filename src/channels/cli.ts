@@ -270,9 +270,8 @@ function createAdapter(): ChannelAdapter {
     // the same line is ignored (send it as its own line, after the ack).
     if (payload.bind !== undefined) {
       const bind = payload.bind as Record<string, unknown> | null;
-      const platformId = bind && typeof bind === 'object' && typeof bind.platformId === 'string'
-        ? bind.platformId.trim()
-        : '';
+      const platformId =
+        bind && typeof bind === 'object' && typeof bind.platformId === 'string' ? bind.platformId.trim() : '';
       if (!platformId) {
         log.warn('CLI: ignoring malformed bind hello', { line });
         return;

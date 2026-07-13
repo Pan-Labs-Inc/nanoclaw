@@ -290,9 +290,7 @@ describe('Admin MCP endpoint', () => {
 
       const res = await callTool(handler, 'group_mount_set', {
         groupName: 'subdest',
-        mounts: [
-          { sourceGroup: 'subsrc', sourcePath: 'pan', containerPath: '/workspace/group/pan', readonly: true },
-        ],
+        mounts: [{ sourceGroup: 'subsrc', sourcePath: 'pan', containerPath: '/workspace/group/pan', readonly: true }],
       });
       expect(res.status).toBe(200);
 

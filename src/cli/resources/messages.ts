@@ -26,10 +26,7 @@
 import { randomUUID } from 'crypto';
 
 import { getAgentGroupByFolder } from '../../db/agent-groups.js';
-import {
-  getMessagingGroupsByAgentGroup,
-  getMessagingGroupAgentByPair,
-} from '../../db/messaging-groups.js';
+import { getMessagingGroupsByAgentGroup, getMessagingGroupAgentByPair } from '../../db/messaging-groups.js';
 import { resolveSession, writeOutboundDirect, writeSessionMessage } from '../../session-manager.js';
 import { log } from '../../log.js';
 import { register } from '../registry.js';
@@ -126,10 +123,7 @@ register({
     // single-active-session tripwire and violating the single-owner turn-store
     // invariant. Fall back to 'shared' only when there is no wiring row.
     const wiring = getMessagingGroupAgentByPair(target.id, agentGroup.id);
-    const sessionMode = (wiring?.session_mode ?? 'shared') as
-      | 'shared'
-      | 'per-thread'
-      | 'agent-shared';
+    const sessionMode = (wiring?.session_mode ?? 'shared') as 'shared' | 'per-thread' | 'agent-shared';
     const { session } = resolveSession(agentGroup.id, target.id, null, sessionMode);
 
     const messageId = `host-send-${Date.now()}-${randomUUID().slice(0, 8)}`;

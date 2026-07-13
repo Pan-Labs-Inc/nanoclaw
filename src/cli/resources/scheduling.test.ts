@@ -37,11 +37,17 @@ function agentCtx(inDb: ReturnType<typeof openInboundDb>): CallerContext {
 
 function taskRow(db: ReturnType<typeof openInboundDb>, id: string) {
   return db
-    .prepare(
-      "SELECT id, kind, status, process_after, recurrence, content, trigger FROM messages_in WHERE id = ?",
-    )
+    .prepare('SELECT id, kind, status, process_after, recurrence, content, trigger FROM messages_in WHERE id = ?')
     .get(id) as
-    | { id: string; kind: string; status: string; process_after: string; recurrence: string | null; content: string; trigger: number }
+    | {
+        id: string;
+        kind: string;
+        status: string;
+        process_after: string;
+        recurrence: string | null;
+        content: string;
+        trigger: number;
+      }
     | undefined;
 }
 
@@ -81,8 +87,8 @@ describe('ncl task schedule', () => {
     expect(row).toBeTruthy();
     expect(row!.kind).toBe('task');
     expect(row!.status).toBe('pending');
-    expect(row!.recurrence).toBeNull();        // one-shot
-    expect(row!.trigger).toBe(1);              // schema default → countDueMessages will wake it
+    expect(row!.recurrence).toBeNull(); // one-shot
+    expect(row!.trigger).toBe(1); // schema default → countDueMessages will wake it
     expect(row!.process_after).toBe('2026-06-15T14:30:00.000Z');
     expect(JSON.parse(row!.content).script).toBe(script); // pre-task script round-trips
     db.close();
@@ -118,9 +124,9 @@ describe('ncl task delete', () => {
     expect(taskRow(db, 'pan-turn-lease-t2')!.status).toBe('completed');
 
     // Deleting again (or an unknown id) is a no-op, not an error.
-    await expect(
-      del.handler(del.parseArgs({ id: 'never-existed' }), agentCtx(db)),
-    ).resolves.toMatchObject({ deleted: true });
+    await expect(del.handler(del.parseArgs({ id: 'never-existed' }), agentCtx(db))).resolves.toMatchObject({
+      deleted: true,
+    });
     db.close();
   });
 

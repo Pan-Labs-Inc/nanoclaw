@@ -120,12 +120,20 @@ describe('cleanupOrphans', () => {
 
     // ps + 2 stop calls
     expect(mockExecSync).toHaveBeenCalledTimes(3);
-    expect(mockExecSync).toHaveBeenNthCalledWith(2, `${CONTAINER_RUNTIME_BIN} stop -t ${STOP_GRACE_SECONDS} nanoclaw-group1-111`, {
-      stdio: 'pipe',
-    });
-    expect(mockExecSync).toHaveBeenNthCalledWith(3, `${CONTAINER_RUNTIME_BIN} stop -t ${STOP_GRACE_SECONDS} nanoclaw-group2-222`, {
-      stdio: 'pipe',
-    });
+    expect(mockExecSync).toHaveBeenNthCalledWith(
+      2,
+      `${CONTAINER_RUNTIME_BIN} stop -t ${STOP_GRACE_SECONDS} nanoclaw-group1-111`,
+      {
+        stdio: 'pipe',
+      },
+    );
+    expect(mockExecSync).toHaveBeenNthCalledWith(
+      3,
+      `${CONTAINER_RUNTIME_BIN} stop -t ${STOP_GRACE_SECONDS} nanoclaw-group2-222`,
+      {
+        stdio: 'pipe',
+      },
+    );
     expect(log.info).toHaveBeenCalledWith('Stopped orphaned containers', {
       count: 2,
       names: ['nanoclaw-group1-111', 'nanoclaw-group2-222'],
