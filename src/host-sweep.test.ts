@@ -24,10 +24,18 @@ import {
   decideStuckAction,
   isPendingPlaceholderSession,
   parseSqliteUtc,
+  reapDefunctSessionContainers,
 } from './host-sweep.js';
-import { closeDb, initTestDb, runMigrations, createAgentGroup, createMessagingGroup } from './db/index.js';
+import {
+  closeDb,
+  initTestDb,
+  runMigrations,
+  createAgentGroup,
+  createMessagingGroup,
+  createSession,
+} from './db/index.js';
 import { updateMessagingGroup } from './db/messaging-groups.js';
-import { resolveSession } from './session-manager.js';
+import { markContainerStopped, resolveSession } from './session-manager.js';
 import { readDmRegistrations, writeDmRegistrations } from './dm-registrations.js';
 import type { Session } from './types.js';
 
@@ -410,5 +418,99 @@ describe('isPendingPlaceholderSession (#1068)', () => {
   it('is false for a session with no messaging group', () => {
     const orphan = { messaging_group_id: null } as unknown as Session;
     expect(isPendingPlaceholderSession(orphan)).toBe(false);
+  });
+});
+
+describe('reapDefunctSessionContainers', () => {
+  const sess = (over: Partial<Session> & { id: string }): Session =>
+    ({
+      agent_group_id: 'ag-1',
+      messaging_group_id: null,
+      thread_id: null,
+      agent_provider: null,
+      status: 'closed',
+      container_status: 'running',
+      last_active: null,
+      created_at: new Date().toISOString(),
+      ...over,
+    }) as Session;
+
+  beforeEach(() => {
+    const db = initTestDb();
+    runMigrations(db);
+    createAgentGroup({
+      id: 'ag-1',
+      name: 'Teen',
+      folder: 'pan-teen-fid',
+      agent_provider: null,
+      created_at: new Date().toISOString(),
+    });
+  });
+
+  afterEach(() => {
+    closeDb();
+  });
+
+  function runtimeRecorder(runningIds: string[]) {
+    const killed: string[] = [];
+    const stopped: string[] = [];
+    return {
+      killed,
+      stopped,
+      runtime: {
+        isRunning: (id: string) => runningIds.includes(id),
+        kill: (id: string, _reason: string) => killed.push(id),
+        markStopped: (id: string) => stopped.push(id),
+      },
+    };
+  }
+
+  it("kills the container of a 'closed' session and leaves row-marking to the exit handler", () => {
+    createSession(sess({ id: 'sess-closed' }));
+    const { killed, stopped, runtime } = runtimeRecorder(['sess-closed']);
+    expect(reapDefunctSessionContainers(runtime)).toBe(1);
+    expect(killed).toEqual(['sess-closed']);
+    expect(stopped).toEqual([]);
+  });
+
+  it("reaps a 'completed' session — Pan's clear-session spelling, outside the TS union", () => {
+    // SQLite doesn't enforce the Session status union; external completion
+    // paths write 'completed'. The reap must match any non-active status.
+    createSession(sess({ id: 'sess-completed', status: 'completed' as Session['status'] }));
+    const { killed, runtime } = runtimeRecorder(['sess-completed']);
+    expect(reapDefunctSessionContainers(runtime)).toBe(1);
+    expect(killed).toEqual(['sess-completed']);
+  });
+
+  it('marks a registry-miss container stopped instead of killing (convergence)', () => {
+    createSession(sess({ id: 'sess-orphan', container_status: 'idle' }));
+    const killed: string[] = [];
+    const stopped: string[] = [];
+    const runtime = {
+      isRunning: () => false,
+      kill: (id: string, _reason: string) => killed.push(id),
+      // Record AND perform the real row update so the convergence half of
+      // this test exercises the production markContainerStopped path.
+      markStopped: (id: string) => {
+        stopped.push(id);
+        markContainerStopped(id);
+      },
+    };
+    expect(reapDefunctSessionContainers(runtime)).toBe(0);
+    expect(killed).toEqual([]);
+    expect(stopped).toEqual(['sess-orphan']);
+    // The row is healed, so the next tick no longer selects it.
+    const again = runtimeRecorder([]);
+    expect(reapDefunctSessionContainers(again.runtime)).toBe(0);
+    expect(again.stopped).toEqual([]);
+  });
+
+  it('never touches active sessions or already-stopped rows', () => {
+    createSession(sess({ id: 'sess-active', status: 'active' }));
+    createSession(sess({ id: 'sess-done', container_status: 'stopped' }));
+    const { killed, stopped, runtime } = runtimeRecorder(['sess-active']);
+    expect(reapDefunctSessionContainers(runtime)).toBe(0);
+    expect(killed).toEqual([]);
+    expect(stopped).toEqual([]);
   });
 });
