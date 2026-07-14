@@ -30,7 +30,7 @@ import type Database from 'better-sqlite3';
 import fs from 'fs';
 
 import { ensureEgressNetwork } from './egress-lockdown.js';
-import { getActiveSessions } from './db/sessions.js';
+import { getActiveSessions, getDefunctSessionsWithContainers } from './db/sessions.js';
 import { getAgentGroup } from './db/agent-groups.js';
 import { getMessagingGroup } from './db/messaging-groups.js';
 import { isUnredeemedStartTokenPlaceholder } from './channels/start-token.js';
@@ -46,7 +46,14 @@ import {
   type ContainerState,
 } from './db/session-db.js';
 import { log } from './log.js';
-import { openInboundDb, openOutboundDb, openOutboundDbRw, inboundDbPath, heartbeatPath } from './session-manager.js';
+import {
+  openInboundDb,
+  openOutboundDb,
+  openOutboundDbRw,
+  inboundDbPath,
+  heartbeatPath,
+  markContainerStopped,
+} from './session-manager.js';
 import { isContainerRunning, killContainer, wakeContainer } from './container-runner.js';
 import type { Session } from './types.js';
 
@@ -154,7 +161,50 @@ async function sweep(): Promise<void> {
     log.error('Host sweep error', { err });
   }
 
+  // Separate try so a reap error can neither starve the active-session pass
+  // nor block the next tick from being scheduled.
+  try {
+    reapDefunctSessionContainers();
+  } catch (err) {
+    log.error('Defunct-session container reap error', { err });
+  }
+
   setTimeout(sweep, SWEEP_INTERVAL_MS);
+}
+
+/**
+ * Reap containers whose session is finished. A completed/closed session's
+ * container can never serve another turn — the next inbound always
+ * cold-spawns a fresh container — but its poll loop keeps writing
+ * heartbeats, so the silence-based ceiling above never fires. Without this
+ * pass every completed session leaks one immortal container (one per
+ * clear-session boundary; a 12-family generate fleet stacked 38+ onto an
+ * 8GB box before capsizing it).
+ *
+ * Containers missing from this process's registry (spawned by a previous
+ * service process) cannot be killed from here; service startup owns those.
+ * Marking them stopped keeps this pass convergent instead of re-selecting
+ * them every tick.
+ */
+export function reapDefunctSessionContainers(
+  runtime: {
+    isRunning: (sessionId: string) => boolean;
+    kill: (sessionId: string, reason: string) => void;
+    markStopped: (sessionId: string) => void;
+  } = { isRunning: isContainerRunning, kill: killContainer, markStopped: markContainerStopped },
+): number {
+  let reaped = 0;
+  for (const session of getDefunctSessionsWithContainers()) {
+    if (runtime.isRunning(session.id)) {
+      log.info('Reaping container for defunct session', { sessionId: session.id, status: session.status });
+      // container-runner's close handler marks the row stopped.
+      runtime.kill(session.id, 'session-defunct');
+      reaped++;
+    } else {
+      runtime.markStopped(session.id);
+    }
+  }
+  return reaped;
 }
 
 /**

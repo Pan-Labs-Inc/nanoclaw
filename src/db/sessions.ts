@@ -71,6 +71,19 @@ export function getRunningSessions(): Session[] {
   return getDb().prepare("SELECT * FROM sessions WHERE container_status IN ('running', 'idle')").all() as Session[];
 }
 
+/**
+ * Sessions that are no longer active but whose bookkeeping says a container
+ * is (or may be) still up. Matches `status != 'active'` rather than
+ * `= 'closed'` on purpose: SQLite doesn't enforce the Session status union
+ * and external session-completion paths write other terminal statuses (e.g.
+ * Pan's clear-session writes 'completed') — none of them may escape the reap.
+ */
+export function getDefunctSessionsWithContainers(): Session[] {
+  return getDb()
+    .prepare("SELECT * FROM sessions WHERE status != 'active' AND container_status IN ('running', 'idle')")
+    .all() as Session[];
+}
+
 export function updateSession(
   id: string,
   updates: Partial<Pick<Session, 'status' | 'container_status' | 'last_active' | 'agent_provider'>>,
