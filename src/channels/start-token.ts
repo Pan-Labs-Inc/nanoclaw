@@ -32,6 +32,7 @@ import { wakeContainer } from '../container-runner.js';
 import { readDmRegistrations, writeDmRegistrations, type DmRegistration } from '../dm-registrations.js';
 import { log } from '../log.js';
 import { isTelegramGroupPlatformId } from '../platform-id.js';
+import { redactStartToken } from '../platform-redaction.js';
 import { resolveSession, writeSessionMessage } from '../session-manager.js';
 
 // The token alphabet/length, shared by every channel: Telegram start payloads
@@ -51,6 +52,17 @@ const GENERIC_RE = new RegExp(`^(?:/?start\\s+)?${TOKEN}$`, 'i');
  * requires the `/start[@bot] <token>` command form (and a matching bot
  * username); other channels accept `start <token>` or a bare token. Returns
  * null for any non-match.
+ *
+ * The token is canonicalised to lowercase. Tokens are minted lowercase, and so
+ * are their registration keys (`<channel>:<token>` in dm-registrations.json and
+ * the placeholder platform_id), but the lookup that consumes this value is
+ * case-SENSITIVE (an exact object-key hit + a BINARY-collated SQLite compare)
+ * while the match regexes are case-INSENSITIVE. Without folding here, a human
+ * who texts `START Tok_...` on SMS (phone auto-capitalisation, or just typing
+ * it up) matches the regex, builds a mis-cased key, and MISSES — silently, since
+ * a miss passes through with no error. Folding to the minted form closes that.
+ * Safe because the token alphabet is lowercase-only, so no two distinct tokens
+ * differ solely by case.
  */
 export function extractStartToken(text: string, opts: { channel: string; botUsername?: string | null }): string | null {
   const trimmed = text.trim();
@@ -59,10 +71,10 @@ export function extractStartToken(text: string, opts: { channel: string; botUser
     if (!m) return null;
     // Reject a mismatched @bot address (a different bot in the same group).
     if (m[1] && (!opts.botUsername || m[1].toLowerCase() !== opts.botUsername.toLowerCase())) return null;
-    return m[2];
+    return m[2].toLowerCase();
   }
   const m = trimmed.match(GENERIC_RE);
-  return m ? m[1] : null;
+  return m ? m[1].toLowerCase() : null;
 }
 
 /**
@@ -154,7 +166,7 @@ export function tryActivateStartToken(input: {
     log.error('start-token registration has no placeholder messaging group', {
       channel: input.channel,
       groupName: reg.groupName,
-      tokenPlatformId,
+      tokenPlatformId: redactStartToken(tokenPlatformId),
     });
     return null;
   }
