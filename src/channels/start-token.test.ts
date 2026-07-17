@@ -129,6 +129,13 @@ describe('extractStartToken — Telegram (/start command form)', () => {
   it('does NOT accept a bare token on Telegram (command form required)', () => {
     expect(extractStartToken(START_TOKEN, tg)).toBeNull();
   });
+
+  it('folds a mis-cased token to the minted lowercase form', () => {
+    // Case-sensitive lookup vs lowercase mint: canonicalise so a mis-cased token
+    // still hits its registration.
+    expect(extractStartToken(`/start ${START_TOKEN.toUpperCase()}`, tg)).toBe(START_TOKEN);
+    expect(extractStartToken(`/start@pan_bot ${START_TOKEN.toUpperCase()}`, tg)).toBe(START_TOKEN);
+  });
 });
 
 describe('extractStartToken — generic channels (SMS, cli)', () => {
@@ -146,6 +153,14 @@ describe('extractStartToken — generic channels (SMS, cli)', () => {
       expect(extractStartToken('start has spaces in it', { channel })).toBeNull();
       expect(extractStartToken('hey what is this', { channel })).toBeNull();
       expect(extractStartToken(`start ${START_TOKEN}!extra`, { channel })).toBeNull();
+    });
+
+    it(`[${channel}] folds a mis-cased token to the minted lowercase form (SMS transcription / auto-capitalise)`, () => {
+      // The lookup key is case-sensitive but the mint is lowercase; a human who
+      // types the token in any other case must still hit the registration.
+      expect(extractStartToken(`START ${START_TOKEN.toUpperCase()}`, { channel })).toBe(START_TOKEN);
+      expect(extractStartToken(`Start Tok_A1B2C3D4E5F6`, { channel })).toBe(START_TOKEN);
+      expect(extractStartToken(START_TOKEN.toUpperCase(), { channel })).toBe(START_TOKEN);
     });
   }
 });
