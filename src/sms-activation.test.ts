@@ -26,7 +26,7 @@ function baseConfig(overrides: Partial<SmsConfig> = {}): SmsConfig {
   return {
     accountSid: 'AC123',
     authToken: 'secret',
-    sender: '+15550001111',
+    fromNumber: '+15550001111',
     validateSignature: false,
     validateCredentials: false,
     optOutStorePath: optOutStorePath(),

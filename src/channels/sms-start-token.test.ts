@@ -81,7 +81,7 @@ function smsConfig(): SmsConfig {
   return {
     accountSid: 'AC00000000000000000000000000000000',
     authToken: 'test-auth-token-secret',
-    sender: SHARED_NUMBER,
+    fromNumber: SHARED_NUMBER,
     validateSignature: false,
     validateCredentials: false,
   };

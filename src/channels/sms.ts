@@ -42,7 +42,16 @@ type FetchLike = typeof fetch;
 export interface SmsConfig {
   accountSid: string;
   authToken: string;
-  sender: string;
+  /** MG… Messaging Service SID — the registered A2P campaign + Advanced Opt-Out identity (production). */
+  messagingServiceSid?: string;
+  /**
+   * E.164 outbound sender number. With a Messaging Service it PINS the From to a
+   * specific number in the pool, so replies route back to THIS instance's inbound
+   * webhook (deterministic per-instance routing) instead of a pool-selected
+   * number that may belong to a sibling box. Without a Messaging Service it is the
+   * bare dev/local sender. At least one of messagingServiceSid / fromNumber must be set.
+   */
+  fromNumber?: string;
   webhookUrl?: string;
   statusCallbackUrl?: string;
   validateSignature: boolean;
@@ -108,16 +117,19 @@ export function readSmsConfig(): SmsConfig | null {
   const accountSid = envValue(env, 'TWILIO_ACCOUNT_SID');
   const authToken = envValue(env, 'TWILIO_AUTH_TOKEN');
   const messagingServiceSid = envValue(env, 'TWILIO_MESSAGING_SERVICE_SID');
-  const sender = messagingServiceSid ?? envValue(env, 'TWILIO_PHONE_NUMBER') ?? envValue(env, 'TWILIO_FROM_NUMBER');
+  const rawPhone = envValue(env, 'TWILIO_PHONE_NUMBER');
+  const rawFrom = envValue(env, 'TWILIO_FROM_NUMBER');
+  // TWILIO_FROM_NUMBER is the explicit per-instance sender pin; TWILIO_PHONE_NUMBER
+  // is the legacy dev-sender name. Either resolves to the outbound From number.
+  const fromNumber = rawFrom ?? rawPhone;
 
-  if (!accountSid || !authToken || !sender) return null;
+  if (!accountSid || !authToken || (!messagingServiceSid && !fromNumber)) return null;
   validateSmsConfigEnv({
     accountSid,
     authToken,
     messagingServiceSid,
-    phoneNumber: envValue(env, 'TWILIO_PHONE_NUMBER'),
-    fromNumber: envValue(env, 'TWILIO_FROM_NUMBER'),
-    sender,
+    phoneNumber: rawPhone,
+    fromNumber: rawFrom,
     allowPhoneSender: envBool(env, 'NANOCLAW_SMS_ALLOW_PHONE_SENDER', false),
   });
 
@@ -143,7 +155,8 @@ export function readSmsConfig(): SmsConfig | null {
   return {
     accountSid,
     authToken,
-    sender,
+    messagingServiceSid,
+    fromNumber,
     webhookUrl,
     statusCallbackUrl: explicitStatusUrl ?? statusCallbackUrlFor(webhookUrl),
     validateSignature: envBool(env, 'TWILIO_VALIDATE_SIGNATURE', true),
@@ -159,7 +172,6 @@ function validateSmsConfigEnv(config: {
   messagingServiceSid?: string;
   phoneNumber?: string;
   fromNumber?: string;
-  sender: string;
   allowPhoneSender: boolean;
 }): void {
   if (!TWILIO_ACCOUNT_SID_RE.test(config.accountSid)) {
@@ -177,10 +189,11 @@ function validateSmsConfigEnv(config: {
   if (config.fromNumber && !E164_PHONE_RE.test(config.fromNumber)) {
     throw new Error('TWILIO_FROM_NUMBER must be E.164, like +15551234567');
   }
-  if (!isValidSmsSender(config.sender)) {
-    throw new Error('SMS sender must be a valid Twilio Messaging Service SID or E.164 phone number');
-  }
-  if (!config.messagingServiceSid && E164_PHONE_RE.test(config.sender) && !config.allowPhoneSender) {
+  // A bare phone sender (no Messaging Service) is a local/dev path — it lacks the
+  // carrier-standard Advanced Opt-Out a Messaging Service enforces. A phone number
+  // ALONGSIDE a Messaging Service is a production sender pin and needs no flag.
+  const bareFrom = config.fromNumber ?? config.phoneNumber;
+  if (!config.messagingServiceSid && bareFrom && !config.allowPhoneSender) {
     throw new Error(
       'TWILIO_PHONE_NUMBER is local/dev only; set TWILIO_MESSAGING_SERVICE_SID for production or NANOCLAW_SMS_ALLOW_PHONE_SENDER=true for local/dev',
     );
@@ -389,8 +402,7 @@ export async function sendTwilioSms(config: SmsConfig, to: string, body: string)
     Body: body,
   });
 
-  const senderParam = senderParamName(config.sender);
-  params.set(senderParam, config.sender);
+  applyOutboundSender(params, config);
   if (config.statusCallbackUrl) params.set('StatusCallback', config.statusCallbackUrl);
 
   const url = `https://api.twilio.com/${TWILIO_MESSAGES_API_VERSION}/Accounts/${encodeURIComponent(
@@ -954,16 +966,28 @@ function statusCallbackUrlFor(webhookUrl: string | undefined): string | undefine
   return url.toString();
 }
 
-/** Choose the Twilio Messages API sender parameter for a sender value. */
-function senderParamName(sender: string): 'MessagingServiceSid' | 'From' {
-  if (TWILIO_MESSAGING_SERVICE_SID_RE.test(sender)) return 'MessagingServiceSid';
-  if (E164_PHONE_RE.test(sender)) return 'From';
+/**
+ * Set the Twilio Messages API sender parameters on an outbound request.
+ *
+ * A Messaging Service SID carries the registered A2P campaign + Advanced Opt-Out.
+ * When a From number is ALSO configured, it is sent alongside the service SID to
+ * PIN the sender to that specific number in the pool — Twilio keeps applying the
+ * service's compliance features but stops pool-selecting a number, so replies
+ * route back to this instance's own inbound webhook instead of a sibling box's.
+ */
+function applyOutboundSender(params: URLSearchParams, config: SmsConfig): void {
+  const hasService = !!config.messagingServiceSid && TWILIO_MESSAGING_SERVICE_SID_RE.test(config.messagingServiceSid);
+  const hasFrom = !!config.fromNumber && E164_PHONE_RE.test(config.fromNumber);
+  if (hasService) {
+    params.set('MessagingServiceSid', config.messagingServiceSid!);
+    if (hasFrom) params.set('From', config.fromNumber!);
+    return;
+  }
+  if (hasFrom) {
+    params.set('From', config.fromNumber!);
+    return;
+  }
   throw new Error('SMS sender must be a valid Twilio Messaging Service SID or E.164 phone number');
-}
-
-/** Validate that a sender is either a Messaging Service SID or E.164 phone number. */
-function isValidSmsSender(sender: string): boolean {
-  return TWILIO_MESSAGING_SERVICE_SID_RE.test(sender) || E164_PHONE_RE.test(sender);
 }
 
 /** Build the HTTP Basic auth value expected by Twilio APIs. */

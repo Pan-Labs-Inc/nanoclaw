@@ -31,7 +31,7 @@ function baseConfig(overrides: Partial<SmsConfig> = {}): SmsConfig {
   return {
     accountSid: 'AC123',
     authToken: 'secret',
-    sender: '+15550001111',
+    fromNumber: '+15550001111',
     validateSignature: true,
     validateCredentials: false,
     ...overrides,
@@ -181,18 +181,20 @@ describe('SMS channel helpers', () => {
     expect(parseSmsOptOutType('OTHER')).toBeNull();
   });
 
-  it('prefers a Messaging Service SID over a phone sender when both are configured', () => {
+  it('carries both the Messaging Service SID and a pinned From number when both are configured', () => {
     withSmsEnv(
       {
         TWILIO_ACCOUNT_SID: VALID_ACCOUNT_SID,
         TWILIO_AUTH_TOKEN: '0123456789abcdef',
         TWILIO_MESSAGING_SERVICE_SID: VALID_MESSAGING_SERVICE_SID,
-        TWILIO_PHONE_NUMBER: '+15550001111',
+        TWILIO_FROM_NUMBER: '+15550001111',
         TWILIO_SMS_WEBHOOK_URL: 'https://example.com/webhook/sms',
         TWILIO_SMS_STATUS_CALLBACK_URL: 'https://example.com/webhook/sms/status',
       },
       () => {
-        expect(readSmsConfig()?.sender).toBe(VALID_MESSAGING_SERVICE_SID);
+        const config = readSmsConfig();
+        expect(config?.messagingServiceSid).toBe(VALID_MESSAGING_SERVICE_SID);
+        expect(config?.fromNumber).toBe('+15550001111');
       },
     );
   });
@@ -306,7 +308,7 @@ describe('SMS channel helpers', () => {
         NANOCLAW_SMS_ALLOW_PHONE_SENDER: 'true',
       },
       () => {
-        expect(readSmsConfig()?.sender).toBe('+15550001111');
+        expect(readSmsConfig()?.fromNumber).toBe('+15550001111');
       },
     );
   });
@@ -385,7 +387,8 @@ describe('SMS delivery', () => {
 
     await sendTwilioSms(
       baseConfig({
-        sender: VALID_MESSAGING_SERVICE_SID,
+        messagingServiceSid: VALID_MESSAGING_SERVICE_SID,
+        fromNumber: undefined,
         statusCallbackUrl: 'https://example.com/webhook/sms/status',
         fetchImpl,
       }),
@@ -398,6 +401,28 @@ describe('SMS delivery', () => {
     );
   });
 
+  it('pins the From alongside the Messaging Service SID so replies route back to this instance', async () => {
+    const calls: string[] = [];
+    const fetchImpl: typeof fetch = async (_url, init) => {
+      calls.push(String(init?.body));
+      return new Response(JSON.stringify({ sid: 'SMpin' }), { status: 201 });
+    };
+
+    await sendTwilioSms(
+      baseConfig({
+        messagingServiceSid: VALID_MESSAGING_SERVICE_SID,
+        fromNumber: '+15550009999',
+        fetchImpl,
+      }),
+      '+15551234567',
+      'hello',
+    );
+
+    expect(calls[0]).toBe(
+      `To=%2B15551234567&Body=hello&MessagingServiceSid=${VALID_MESSAGING_SERVICE_SID}&From=%2B15550009999`,
+    );
+  });
+
   it('rejects invalid outbound senders before calling Twilio', async () => {
     let called = false;
     const fetchImpl: typeof fetch = async () => {
@@ -406,11 +431,15 @@ describe('SMS delivery', () => {
     };
 
     await expect(
-      sendTwilioSms(baseConfig({ sender: 'not-a-sender', fetchImpl }), '+15551234567', 'hello'),
+      sendTwilioSms(baseConfig({ fromNumber: 'not-a-sender', fetchImpl }), '+15551234567', 'hello'),
     ).rejects.toThrow(/SMS sender/);
-    await expect(sendTwilioSms(baseConfig({ sender: 'MG123', fetchImpl }), '+15551234567', 'hello')).rejects.toThrow(
-      /SMS sender/,
-    );
+    await expect(
+      sendTwilioSms(
+        baseConfig({ messagingServiceSid: 'MG123', fromNumber: undefined, fetchImpl }),
+        '+15551234567',
+        'hello',
+      ),
+    ).rejects.toThrow(/SMS sender/);
     expect(called).toBe(false);
   });
 
